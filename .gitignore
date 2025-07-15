@@ -1,0 +1,4 @@
+config.yaml
+data/
+logs/
+src/__pycache__

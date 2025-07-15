@@ -1,0 +1,98 @@
+# YouTube Topic Seeker Configuration Sample
+# Copy this file to config.yaml and modify settings
+
+# OpenAI API Settings
+openai:
+  api_key: "YOUR_OPENAI_API_KEY_HERE"
+  model: "gpt-4o-mini"
+  max_tokens: 2000
+  temperature: 0.3
+  max_retries: 3
+
+# YouTube Download Settings
+youtube:
+  # Preferred language codes for subtitles (priority order)
+  subtitle_languages: ["ja", "en", "auto"]
+  # Download quality preference
+  quality: "bestvideo+bestaudio"
+  # Maximum videos per channel (0 = all)
+  max_videos_per_channel: 0
+  # Skip videos older than N days (0 = no limit)
+  max_age_days: 0
+  # Bot detection avoidance settings
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  sleep_interval: 2  # Request interval in seconds
+  random_sleep: true
+  max_sleep: 5  # Maximum random sleep time
+
+# Phase 1: Data Download Settings
+phase1:
+  output_dir: "./data/1-plain"
+  # Include additional context information
+  include_metadata: true
+  include_description: true
+  include_tags: true
+  include_channel_info: true
+  # Save transcript with timestamp information
+  preserve_timestamps: true
+
+# Phase 2: Transcript Enhancement Settings
+phase2:
+  input_dir: "./data/1-plain"
+  output_dir: "./data/2-target"
+  # Enhancement prompt strategy
+  use_context_prompt: true
+  # Batch processing settings
+  batch_size: 5
+  # Skip files that already exist
+  skip_existing: true
+
+# Phase 3: RAG Settings
+rag:
+  input_dir: "./data/2-target"
+  vectorstore_dir: "./data/vectorstore"
+  # Embedding settings
+  embedding_model: "text-embedding-ada-002"
+  chunk_size: 1000
+  chunk_overlap: 200
+  # Retrieval settings
+  retrieval_k: 5
+  similarity_threshold: 0.7
+  # LLM settings
+  llm_model: "gpt-4o-mini"
+  llm_temperature: 0.1
+
+# General Settings
+general:
+  # Debug mode (true/false)
+  debug: false
+  # Console output verbosity (1-3)
+  verbosity: 2
+  # Number of parallel processing threads
+  max_workers: 4
+
+# Proxy Settings (SSH SOCKS proxy through client PC)
+proxy:
+  enabled: false
+  type: "socks5"  # socks5 or http
+  host: "127.0.0.1"
+  port: 1080
+  # Usage: On client PC, run: ssh -D 1080 user@ec2-instance
+  # This creates SOCKS5 proxy tunnel through SSH connection
+
+# Email Notification Settings (optional)
+email:
+  enabled: false
+  smtp_server: "smtp.gmail.com"
+  smtp_port: 587
+  username: "your_email@example.com"
+  password: "your_app_password"
+  recipient: "recipient@example.com"
+
+# Logging Settings
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "./logs/app.log"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  max_size_mb: 10
+  backup_count: 5

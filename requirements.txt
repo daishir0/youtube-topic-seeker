@@ -1,0 +1,31 @@
+# YouTube Topic Seeker Requirements
+
+# Core dependencies
+PyYAML>=6.0
+python-dotenv>=1.0.0
+
+# YouTube download
+yt-dlp>=2023.12.30
+pytube>=12.1.2
+
+# OpenAI and LangChain
+openai>=1.0.0
+langchain>=0.0.300
+langchain-openai>=0.0.1
+langchain-community>=0.0.1
+langchain-chroma>=0.0.1
+
+# Vector store and embeddings
+chromadb>=0.4.0
+tiktoken>=0.5.0
+
+# Utilities
+requests>=2.31.0
+numpy>=1.24.0
+pandas>=2.0.0
+tqdm>=4.65.0
+scikit-learn>=1.0.0
+httpx[socks]>=0.28.0
+
+# Optional: for additional file processing
+beautifulsoup4>=4.12.0
