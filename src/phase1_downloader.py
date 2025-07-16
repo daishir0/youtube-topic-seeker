@@ -735,6 +735,204 @@ class YouTubeDownloader:
         logger.info(f"Channel processing completed. Success rate: {results['success_rate']:.2%}")
         return results
     
+    def process_videos(self, video_urls: List[str], incremental: bool = True) -> Dict[str, Any]:
+        """Process individual video URLs with channel auto-detection"""
+        logger.info(f"Starting video processing: {len(video_urls)} video(s) (incremental: {incremental})")
+        
+        results = {
+            'total_videos': len(video_urls),
+            'processed_videos': [],
+            'failed_videos': [],
+            'skipped_videos': [],
+            'started_at': datetime.now().isoformat(),
+            'channel_registrations': []
+        }
+        
+        # Process each video URL
+        for i, video_url in enumerate(video_urls, 1):
+            logger.info(f"Processing video {i}/{len(video_urls)}: {video_url}")
+            
+            try:
+                # Extract video ID for duplicate check
+                video_id = self._extract_video_id(video_url)
+                if not video_id:
+                    logger.error(f"Could not extract video ID from {video_url}")
+                    results['failed_videos'].append({
+                        'url': video_url,
+                        'error': 'Could not extract video ID'
+                    })
+                    continue
+                
+                # Check if video already exists (incremental mode)
+                if incremental and self._is_video_already_processed(video_id):
+                    logger.info(f"Video {video_id} already processed, skipping")
+                    results['skipped_videos'].append(video_url)
+                    continue
+                
+                # Extract channel information from video metadata
+                channel_info = self._extract_channel_info_from_video(video_url)
+                if not channel_info:
+                    logger.error(f"Could not extract channel info from {video_url}")
+                    results['failed_videos'].append({
+                        'url': video_url,
+                        'error': 'Could not extract channel info'
+                    })
+                    continue
+                
+                # Register/update channel if needed
+                channel_id = self._register_channel_from_video(channel_info)
+                if not channel_id:
+                    logger.error(f"Could not register channel for {video_url}")
+                    results['failed_videos'].append({
+                        'url': video_url,
+                        'error': 'Could not register channel'
+                    })
+                    continue
+                
+                # Download video data
+                video_data = self.download_video_data(video_url, channel_id)
+                if video_data:
+                    results['processed_videos'].append({
+                        'url': video_url,
+                        'video_id': video_id,
+                        'channel_id': channel_id,
+                        'title': video_data.get('title', 'Unknown'),
+                        'output_dir': video_data.get('output_dir')
+                    })
+                    logger.info(f"Successfully processed video: {video_id}")
+                else:
+                    results['failed_videos'].append({
+                        'url': video_url,
+                        'error': 'Failed to download video data'
+                    })
+                    logger.error(f"Failed to download video data for {video_url}")
+                
+                # Track channel registration
+                if channel_id not in [c['channel_id'] for c in results['channel_registrations']]:
+                    results['channel_registrations'].append({
+                        'channel_id': channel_id,
+                        'channel_name': channel_info.get('name', 'Unknown'),
+                        'channel_url': channel_info.get('url', 'Unknown')
+                    })
+                
+            except Exception as e:
+                logger.error(f"Error processing video {video_url}: {e}")
+                results['failed_videos'].append({
+                    'url': video_url,
+                    'error': str(e)
+                })
+        
+        # Calculate results
+        results['completed_at'] = datetime.now().isoformat()
+        results['success_rate'] = len(results['processed_videos']) / len(video_urls) if video_urls else 0
+        results['new_videos_count'] = len(results['processed_videos'])
+        results['incremental_mode'] = incremental
+        
+        # Save summary
+        output_dir = self.output_dir
+        summary_file = output_dir / f"videos_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(summary_file, 'w', encoding='utf-8') as f:
+            json.dump(results, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"Video processing completed. Success rate: {results['success_rate']:.2%}")
+        logger.info(f"Registered/updated {len(results['channel_registrations'])} channels")
+        
+        return results
+    
+    def _extract_channel_info_from_video(self, video_url: str) -> Optional[Dict[str, Any]]:
+        """Extract channel information from video metadata"""
+        try:
+            # Use existing metadata extraction method
+            metadata = self._extract_video_metadata(video_url)
+            if not metadata:
+                return None
+            
+            # Extract channel information
+            channel_info = {
+                'name': metadata.get('uploader') or metadata.get('channel', 'Unknown'),
+                'id': metadata.get('uploader_id') or metadata.get('channel_id', ''),
+                'url': metadata.get('channel_url', ''),
+                'description': metadata.get('description', ''),
+                'subscriber_count': metadata.get('subscriber_count', 0)
+            }
+            
+            # Generate channel URL if not present
+            if not channel_info['url'] and channel_info['id']:
+                if channel_info['id'].startswith('@'):
+                    channel_info['url'] = f"https://www.youtube.com/{channel_info['id']}"
+                elif channel_info['id'].startswith('UC'):
+                    channel_info['url'] = f"https://www.youtube.com/channel/{channel_info['id']}"
+                else:
+                    channel_info['url'] = f"https://www.youtube.com/user/{channel_info['id']}"
+            
+            logger.debug(f"Extracted channel info: {channel_info['name']} ({channel_info['id']})")
+            return channel_info
+            
+        except Exception as e:
+            logger.error(f"Error extracting channel info from {video_url}: {e}")
+            return None
+    
+    def _register_channel_from_video(self, channel_info: Dict[str, Any]) -> Optional[str]:
+        """Register or update channel from video metadata"""
+        try:
+            channel_id = channel_info.get('id')
+            channel_name = channel_info.get('name', 'Unknown')
+            channel_url = channel_info.get('url', '')
+            
+            if not channel_id:
+                logger.error("No channel ID found in channel info")
+                return None
+            
+            # Check if channel already exists
+            existing_channel = self.channel_manager.get_channel(channel_id)
+            if existing_channel:
+                logger.debug(f"Channel {channel_id} already exists, updating if needed")
+                # Update channel info if needed
+                if existing_channel.name != channel_name:
+                    # Update channel name if different
+                    logger.info(f"Updating channel name: {existing_channel.name} -> {channel_name}")
+                return channel_id
+            
+            # Register new channel
+            logger.info(f"Registering new channel: {channel_name} ({channel_id})")
+            registered_id = self.channel_manager.add_channel(channel_url, channel_name)
+            
+            if registered_id:
+                logger.info(f"Successfully registered channel: {channel_name}")
+                return registered_id
+            else:
+                logger.error(f"Failed to register channel: {channel_name}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error registering channel: {e}")
+            return None
+    
+    def _is_video_already_processed(self, video_id: str) -> bool:
+        """Check if video has already been processed"""
+        # Check in all channel directories
+        for channel_dir in self.output_dir.iterdir():
+            if not channel_dir.is_dir():
+                continue
+                
+            for video_dir in channel_dir.iterdir():
+                if not video_dir.is_dir():
+                    continue
+                    
+                # Check if directory name contains video ID
+                if video_id in video_dir.name:
+                    metadata_file = video_dir / "metadata.json"
+                    if metadata_file.exists():
+                        try:
+                            with open(metadata_file, 'r', encoding='utf-8') as f:
+                                metadata = json.load(f)
+                            if metadata.get('id') == video_id:
+                                return True
+                        except Exception:
+                            continue
+        
+        return False
+    
     def process_all_channels(self, incremental: bool = True) -> Dict[str, Any]:
         """Process all enabled channels"""
         logger.info("Starting processing of all enabled channels")

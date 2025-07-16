@@ -35,6 +35,7 @@ from phase1_downloader import YouTubeDownloader
 from phase2_enhancer import TranscriptEnhancer
 from phase3_rag import TopicSearchRAG
 from channel_manager import ChannelManager
+from url_classifier import URLClassifier
 
 class YouTubeTopicSeeker:
     """Main application class for YouTube topic searching"""
@@ -51,6 +52,7 @@ class YouTubeTopicSeeker:
             self.enhancer = TranscriptEnhancer(self.config)
             self.rag = TopicSearchRAG(self.config)
             self.channel_manager = ChannelManager(self.config)
+            self.url_classifier = URLClassifier()
             
             self.logger.info("YouTube Topic Seeker initialized successfully")
             
@@ -97,13 +99,30 @@ class YouTubeTopicSeeker:
                 self.logger.error(f"Unexpected error in interactive mode: {e}")
                 print(f"❌ Unexpected error: {e}")
     
-    def run_automatic(self, channel_urls: list):
-        """Run automatic processing for multiple channels"""
+    def run_automatic(self, urls: list):
+        """Run automatic processing for multiple URLs (channels or videos)"""
         print("="*60)
         print("🎯 YouTube Topic Seeker - Automatic Mode")
         print("="*60)
-        print(f"📺 Processing {len(channel_urls)} channel(s)")
+        print(f"📺 Processing {len(urls)} URL(s)")
         
+        # URL分類とモード判定
+        processing_mode, channel_urls, video_urls = self.url_classifier.determine_processing_mode(urls)
+        
+        print(f"🔍 Processing mode: {processing_mode}")
+        if processing_mode == 'channel':
+            print(f"📺 Channel URLs: {len(channel_urls)}")
+            return self._run_automatic_channels(channel_urls)
+        elif processing_mode == 'video':
+            print(f"🎬 Video URLs: {len(video_urls)}")
+            return self._run_automatic_videos(video_urls)
+        else:
+            print("❌ Invalid or mixed URL types detected")
+            print("💡 Please provide either all channel URLs or all video URLs")
+            return
+
+    def _run_automatic_channels(self, channel_urls: list):
+        """Run automatic processing for multiple channels (existing logic)"""
         total_success = 0
         total_failed = 0
         results_summary = []
@@ -204,6 +223,113 @@ class YouTubeTopicSeeker:
             for result in results_summary:
                 status_icon = "✅" if result['status'] == 'success' else "❌"
                 print(f"{status_icon} {result['channel']}: {result['phase']}")
+                if result['status'] == 'success' and 'new_videos' in result:
+                    print(f"   📺 New videos: {result['new_videos']}")
+                elif result['status'] == 'failed':
+                    print(f"   ❌ Error: {result['error']}")
+        
+        if total_success > 0:
+            print("\n🎉 Processing completed!")
+            print("🔍 You can now search for topics in your videos.")
+
+    def _run_automatic_videos(self, video_urls: list):
+        """Run automatic processing for multiple videos (new logic)"""
+        total_success = 0
+        total_failed = 0
+        results_summary = []
+        
+        for i, video_url in enumerate(video_urls, 1):
+            print(f"\n🔄 Processing video {i}/{len(video_urls)}: {video_url}")
+            print("-" * 50)
+            
+            try:
+                # Phase 1: Download video data
+                print("📥 Phase 1: Downloading video...")
+                results1 = self.downloader.process_videos(video_urls, incremental=True)
+                if results1.get('success_rate', 0) == 0:
+                    print(f"❌ Phase 1 failed for videos, stopping")
+                    total_failed += len(video_urls)
+                    break
+                
+                new_videos = len(results1['processed_videos'])
+                print(f"✅ Phase 1 completed: {new_videos} new videos processed")
+                
+                if new_videos == 0:
+                    print(f"ℹ️ No new videos found")
+                    total_success += 1
+                    results_summary.append({
+                        'video': 'all_videos',
+                        'status': 'success',
+                        'phase': 'completed',
+                        'new_videos': 0
+                    })
+                    break
+                
+                # Phase 2: Enhance transcripts
+                print("✨ Phase 2: Enhancing transcripts...")
+                results2 = self.enhancer.process_all_videos(incremental=True)
+                if results2.get('success_count', 0) == 0:
+                    print(f"❌ Phase 2 failed for videos")
+                    total_failed += 1
+                    results_summary.append({
+                        'video': 'all_videos',
+                        'status': 'failed',
+                        'phase': 'Phase 2',
+                        'error': 'Phase 2 failed'
+                    })
+                    break
+                
+                print(f"✅ Phase 2 completed: {results2['success_count']} enhanced transcripts")
+                
+                # Phase 3: Build vector store
+                print("🏗️ Phase 3: Building vector store...")
+                results3 = self.rag.build_vectorstore(incremental=True)
+                if not results3.get('success'):
+                    print(f"❌ Phase 3 failed: {results3.get('error')}")
+                    total_failed += 1
+                    results_summary.append({
+                        'video': 'all_videos',
+                        'status': 'failed',
+                        'phase': 'Phase 3',
+                        'error': results3.get('error')
+                    })
+                    break
+                
+                print(f"✅ Phase 3 completed: Vector store updated")
+                total_success += 1
+                results_summary.append({
+                    'video': 'all_videos',
+                    'status': 'success',
+                    'phase': 'completed',
+                    'new_videos': new_videos
+                })
+                break  # すべての動画を一括処理
+                
+            except Exception as e:
+                self.logger.error(f"Automatic processing failed for videos: {e}")
+                print(f"❌ Automatic processing failed for videos: {e}")
+                total_failed += 1
+                results_summary.append({
+                    'video': 'all_videos',
+                    'status': 'failed',
+                    'phase': 'exception',
+                    'error': str(e)
+                })
+                break
+        
+        # Final summary
+        print("\n" + "="*60)
+        print("📊 PROCESSING SUMMARY")
+        print("="*60)
+        print(f"✅ Successful: {total_success} batch")
+        print(f"❌ Failed: {total_failed} batch")
+        print(f"📺 Total Videos: {len(video_urls)}")
+        
+        if results_summary:
+            print("\n📋 Detailed Results:")
+            for result in results_summary:
+                status_icon = "✅" if result['status'] == 'success' else "❌"
+                print(f"{status_icon} Videos: {result['phase']}")
                 if result['status'] == 'success' and 'new_videos' in result:
                     print(f"   📺 New videos: {result['new_videos']}")
                 elif result['status'] == 'failed':
@@ -317,40 +443,108 @@ class YouTubeTopicSeeker:
         print("🏗️ Phase 3: Build Vector Store")
         print("="*50)
         
-        # Check if Phase 2 data exists
-        enhanced_files = list(self.config.get_phase2_path().glob("*_enhanced.json"))
-        if not enhanced_files:
+        # Check if Phase 2 data exists by scanning channel directories
+        phase2_path = self.config.get_phase2_path()
+        all_enhanced_files = []
+        channels_with_files = []
+        
+        for channel_dir in phase2_path.iterdir():
+            if channel_dir.is_dir():
+                enhanced_files = list(channel_dir.glob("*_enhanced.json"))
+                if enhanced_files:
+                    all_enhanced_files.extend(enhanced_files)
+                    channels_with_files.append({
+                        'name': channel_dir.name,
+                        'files': len(enhanced_files)
+                    })
+        
+        if not all_enhanced_files:
             print("❌ No enhanced transcripts found. Please run Phase 2 first.")
             return
         
-        print(f"📁 Found {len(enhanced_files)} enhanced transcript files")
-        confirm = input("\\n➤ Build vector store for search? (y/N): ").strip().lower()
-        if confirm != 'y':
-            print("❌ Vector store build cancelled")
-            return
+        print(f"📁 Found {len(all_enhanced_files)} enhanced transcript files across {len(channels_with_files)} channels:")
+        for channel in channels_with_files:
+            print(f"  - {channel['name']}: {channel['files']} files")
         
-        print("\\n🔄 Building vector store...")
+        # Choose build mode
+        print("\\n📋 Vector Store Build Options:")
+        print("1. 📺 Build for all channels (チャンネル別)")
+        print("2. 🔍 Build for specific channel")
+        print("3. 🚫 Cancel")
+        
+        choice = input("\\n➤ Choose build mode (1-3): ").strip()
+        
+        if choice == '1':
+            self._build_all_channels_vectorstore()
+        elif choice == '2':
+            self._build_specific_channel_vectorstore(channels_with_files)
+        else:
+            print("❌ Vector store build cancelled")
+    
+    def _build_all_channels_vectorstore(self):
+        """Build vector stores for all channels"""
+        print("\\n🔄 Building vector stores for all channels...")
         print("⏱️  This may take several minutes...")
         
         try:
-            results = self.rag.build_vectorstore(incremental=True)
+            results = self.rag.build_all_channels(incremental=True)
             
-            if results.get('success'):
-                build_info = results['build_info']
-                print(f"\\n✅ Vector store built successfully!")
-                if results.get('incremental_mode', False):
-                    print(f"📊 New videos added: {build_info['new_videos_count']}")
-                    print(f"📄 New chunks: {build_info['total_chunks']}")
-                    print(f"🧩 New segments: {build_info['total_segments']}")
-                else:
+            if results.get('success_rate', 0) > 0:
+                print(f"\\n✅ Vector stores built successfully!")
+                print(f"📊 Processed channels: {len(results['processed_channels'])}")
+                print(f"❌ Failed channels: {len(results['failed_channels'])}")
+                print(f"📈 Success rate: {results['success_rate']:.1%}")
+                
+                for channel_result in results['processed_channels']:
+                    build_info = channel_result.get('build_info', {})
+                    channel_name = channel_result.get('channel_name', 'Unknown')
+                    print(f"  ✅ {channel_name}: {build_info.get('total_videos', 0)} videos, {build_info.get('total_chunks', 0)} chunks")
+                
+                if results['failed_channels']:
+                    print("\\n❌ Failed channels:")
+                    for failed in results['failed_channels']:
+                        print(f"  - {failed['channel_name']}: {failed['error']}")
+            else:
+                print(f"❌ Vector store build failed for all channels")
+                
+        except Exception as e:
+            self.logger.error(f"Phase 3 all channels failed: {e}")
+            print(f"❌ Vector store build failed: {e}")
+    
+    def _build_specific_channel_vectorstore(self, channels_with_files):
+        """Build vector store for a specific channel"""
+        print("\\n📺 Available channels:")
+        for i, channel in enumerate(channels_with_files, 1):
+            print(f"  {i}. {channel['name']} ({channel['files']} files)")
+        
+        try:
+            choice = input("\\n➤ Enter channel number: ").strip()
+            channel_index = int(choice) - 1
+            
+            if 0 <= channel_index < len(channels_with_files):
+                channel = channels_with_files[channel_index]
+                channel_name = channel['name']
+                
+                print(f"\\n🔄 Building vector store for '{channel_name}'...")
+                print("⏱️  This may take several minutes...")
+                
+                results = self.rag.build_vectorstore(incremental=True, channel_id=channel_name)
+                
+                if results.get('success'):
+                    build_info = results['build_info']
+                    print(f"\\n✅ Vector store for '{channel_name}' built successfully!")
                     print(f"📊 Videos: {build_info['total_videos']}")
                     print(f"📄 Chunks: {build_info['total_chunks']}")
                     print(f"🧩 Segments: {build_info['total_segments']}")
+                else:
+                    print(f"❌ Vector store build failed: {results.get('error')}")
             else:
-                print(f"❌ Vector store build failed: {results.get('error')}")
+                print("❌ Invalid channel selection")
                 
+        except (ValueError, IndexError):
+            print("❌ Invalid channel selection")
         except Exception as e:
-            self.logger.error(f"Phase 3 failed: {e}")
+            self.logger.error(f"Phase 3 specific channel failed: {e}")
             print(f"❌ Vector store build failed: {e}")
     
     def _run_full_pipeline_interactive(self):
@@ -1235,15 +1429,15 @@ class YouTubeTopicSeeker:
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description='YouTube Topic Seeker')
-    parser.add_argument('channel_urls', nargs='*', help='YouTube channel URLs to process automatically')
+    parser.add_argument('urls', nargs='*', help='YouTube channel URLs or video URLs to process automatically')
     
     args = parser.parse_args()
     
     try:
         app = YouTubeTopicSeeker()
-        if args.channel_urls:
-            # 自動処理モード（複数チャンネル対応）
-            app.run_automatic(args.channel_urls)
+        if args.urls:
+            # 自動処理モード（チャンネル・動画URL両対応）
+            app.run_automatic(args.urls)
         else:
             # 対話モード
             app.run_interactive()
