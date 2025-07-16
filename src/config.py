@@ -28,11 +28,23 @@ class YouTubeConfig:
     max_videos_per_channel: int = 0
     max_age_days: int = 0
     user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    sleep_interval: int = 2
+    sleep_interval: int = 3
     random_sleep: bool = True
-    max_sleep: int = 5
+    max_sleep: int = 8
+    min_sleep: int = 2
+    request_timeout: int = 30
+    max_retries: int = 5
+    retry_sleep: int = 10
 
 @dataclass
+class DateFilterConfig:
+    """Date filtering configuration for Phase 1"""
+    enabled: bool = True
+    mode: str = "recent"  # "recent", "since", "all"
+    default_months: int = 12
+    since_date: Optional[str] = None  # YYYY-MM-DD format
+
+@dataclass  
 class Phase1Config:
     """Phase 1 data download configuration"""
     output_dir: str = "./data/1-plain"
@@ -41,6 +53,7 @@ class Phase1Config:
     include_tags: bool = True
     include_channel_info: bool = True
     preserve_timestamps: bool = True
+    date_filter: DateFilterConfig = field(default_factory=DateFilterConfig)
 
 @dataclass
 class Phase2Config:
@@ -183,21 +196,36 @@ class Config:
             max_videos_per_channel=youtube_config.get('max_videos_per_channel', 0),
             max_age_days=youtube_config.get('max_age_days', 0),
             user_agent=youtube_config.get('user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'),
-            sleep_interval=youtube_config.get('sleep_interval', 2),
+            sleep_interval=youtube_config.get('sleep_interval', 3),
             random_sleep=youtube_config.get('random_sleep', True),
-            max_sleep=youtube_config.get('max_sleep', 5)
+            max_sleep=youtube_config.get('max_sleep', 8),
+            min_sleep=youtube_config.get('min_sleep', 2),
+            request_timeout=youtube_config.get('request_timeout', 30),
+            max_retries=youtube_config.get('max_retries', 5),
+            retry_sleep=youtube_config.get('retry_sleep', 10)
         )
     
     def _init_phase1_config(self) -> Phase1Config:
         """Initialize Phase 1 configuration"""
         phase1_config = self._config_data.get('phase1', {})
+        
+        # Initialize date filter configuration
+        date_filter_config = phase1_config.get('date_filter', {})
+        date_filter = DateFilterConfig(
+            enabled=date_filter_config.get('enabled', True),
+            mode=date_filter_config.get('mode', 'recent'),
+            default_months=date_filter_config.get('default_months', 12),
+            since_date=date_filter_config.get('since_date', None)
+        )
+        
         return Phase1Config(
             output_dir=phase1_config.get('output_dir', './data/1-plain'),
             include_metadata=phase1_config.get('include_metadata', True),
             include_description=phase1_config.get('include_description', True),
             include_tags=phase1_config.get('include_tags', True),
             include_channel_info=phase1_config.get('include_channel_info', True),
-            preserve_timestamps=phase1_config.get('preserve_timestamps', True)
+            preserve_timestamps=phase1_config.get('preserve_timestamps', True),
+            date_filter=date_filter
         )
     
     def _init_phase2_config(self) -> Phase2Config:
@@ -312,6 +340,7 @@ class Config:
     def setup_logging(self):
         """Setup logging configuration"""
         from logging.handlers import RotatingFileHandler
+        import sys
         
         # Convert log level string to logging constant
         level = getattr(logging, self.logging.level.upper(), logging.INFO)
@@ -326,18 +355,27 @@ class Config:
         # Clear existing handlers
         root_logger.handlers.clear()
         
-        # Console handler
-        console_handler = logging.StreamHandler()
+        # Console handler with UTF-8 encoding
+        console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(level)
         console_handler.setFormatter(formatter)
+        
+        # Set encoding for Windows console
+        if hasattr(console_handler.stream, 'reconfigure'):
+            try:
+                console_handler.stream.reconfigure(encoding='utf-8')
+            except:
+                pass
+        
         root_logger.addHandler(console_handler)
         
-        # File handler with rotation
+        # File handler with rotation and UTF-8 encoding
         if self.logging.file:
             file_handler = RotatingFileHandler(
                 self.logging.file,
                 maxBytes=self.logging.max_size_mb * 1024 * 1024,
-                backupCount=self.logging.backup_count
+                backupCount=self.logging.backup_count,
+                encoding='utf-8'
             )
             file_handler.setLevel(level)
             file_handler.setFormatter(formatter)
@@ -383,6 +421,37 @@ class Config:
     def get_channels_file_path(self) -> Path:
         """Get channels management file path as Path object"""
         return Path(self.channels.management_file).resolve()
+    
+    def update_date_filter_config(self, mode: str, default_months: int = 12, since_date: Optional[str] = None, enabled: bool = True):
+        """Update date filter configuration and save to config file"""
+        # Update in-memory configuration
+        self.phase1.date_filter.enabled = enabled
+        self.phase1.date_filter.mode = mode
+        self.phase1.date_filter.default_months = default_months
+        self.phase1.date_filter.since_date = since_date
+        
+        # Update configuration data
+        if 'phase1' not in self._config_data:
+            self._config_data['phase1'] = {}
+        if 'date_filter' not in self._config_data['phase1']:
+            self._config_data['phase1']['date_filter'] = {}
+            
+        self._config_data['phase1']['date_filter']['enabled'] = enabled
+        self._config_data['phase1']['date_filter']['mode'] = mode
+        self._config_data['phase1']['date_filter']['default_months'] = default_months
+        self._config_data['phase1']['date_filter']['since_date'] = since_date
+        
+        # Save to file
+        self._save_config()
+    
+    def _save_config(self):
+        """Save current configuration to YAML file"""
+        try:
+            with open(self.config_path, 'w', encoding='utf-8') as f:
+                yaml.dump(self._config_data, f, default_flow_style=False, allow_unicode=True, indent=2)
+        except Exception as e:
+            logging.error(f"Failed to save configuration: {e}")
+            raise
     
     def get_channel_phase1_path(self, channel_id: str) -> Path:
         """Get Phase 1 output directory for specific channel"""

@@ -5,7 +5,7 @@ PyYAML>=6.0
 python-dotenv>=1.0.0
 
 # YouTube download
-yt-dlp>=2023.12.30
+yt-dlp>=2024.12.13
 pytube>=12.1.2
 
 # OpenAI and LangChain

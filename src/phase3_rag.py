@@ -146,12 +146,36 @@ class TopicSearchRAG:
         
         vectorstore_dir.mkdir(parents=True, exist_ok=True)
         
-        # Load all enhanced transcripts
+        # Load all enhanced transcripts with multi-channel support
         if not input_dir.exists():
             logger.error(f"Input directory does not exist: {input_dir}")
             return {'success': False, 'error': f'Input directory not found: {input_dir}'}
         
-        enhanced_files = list(input_dir.glob("*_enhanced.json"))
+        # Collect enhanced files from all channels if no specific channel is specified
+        enhanced_files = []
+        
+        if channel_id:
+            # Single channel mode
+            enhanced_files = list(input_dir.glob("*_enhanced.json"))
+        else:
+            # Multi-channel mode: scan all channel directories
+            def scan_for_enhanced_files(base_dir: Path) -> List[Path]:
+                """Scan for enhanced files in multi-channel structure"""
+                files = []
+                
+                # New structure: channel subdirectories only
+                for item in base_dir.iterdir():
+                    if item.is_dir():
+                        # Check if this directory contains enhanced files
+                        channel_enhanced_files = list(item.glob("*_enhanced.json"))
+                        if channel_enhanced_files:
+                            files.extend(channel_enhanced_files)
+                            logger.debug(f"Found {len(channel_enhanced_files)} enhanced files in channel directory: {item.name}")
+                
+                return files
+            
+            enhanced_files = scan_for_enhanced_files(input_dir)
+            logger.info(f"Found {len(enhanced_files)} enhanced files across all channels")
         
         # Filter for new files only if incremental update is enabled
         if incremental:

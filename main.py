@@ -8,12 +8,24 @@ and searching for topics with timestamp-precise results.
 """
 
 import sys
+import os
 import logging
 import argparse
 from pathlib import Path
-from typing import Optional
-import smtplib
 from datetime import datetime
+
+# Set environment variables for proper UTF-8 handling on Windows
+os.environ['PYTHONIOENCODING'] = 'utf-8'
+if sys.platform == 'win32':
+    # Enable UTF-8 mode for Windows console
+    try:
+        import locale
+        locale.setlocale(locale.LC_ALL, 'C.UTF-8')
+    except:
+        try:
+            locale.setlocale(locale.LC_ALL, 'ja_JP.UTF-8')
+        except:
+            pass
 
 # Add src directory to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -23,15 +35,14 @@ from phase1_downloader import YouTubeDownloader
 from phase2_enhancer import TranscriptEnhancer
 from phase3_rag import TopicSearchRAG
 from channel_manager import ChannelManager
-from data_migrator import DataMigrator
 
 class YouTubeTopicSeeker:
     """Main application class for YouTube topic searching"""
     
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self):
         """Initialize the application"""
         try:
-            self.config = Config(config_path)
+            self.config = Config()
             self.config.setup_logging()
             self.logger = logging.getLogger(__name__)
             
@@ -40,7 +51,6 @@ class YouTubeTopicSeeker:
             self.enhancer = TranscriptEnhancer(self.config)
             self.rag = TopicSearchRAG(self.config)
             self.channel_manager = ChannelManager(self.config)
-            self.data_migrator = DataMigrator(self.config)
             
             self.logger.info("YouTube Topic Seeker initialized successfully")
             
@@ -48,7 +58,7 @@ class YouTubeTopicSeeker:
             print(f"Failed to initialize application: {e}")
             sys.exit(1)
     
-    def run_interactive(self, send_email: bool = False):
+    def run_interactive(self):
         """Run interactive mode"""
         print("\\n" + "="*60)
         print("🎯 YouTube Topic Seeker - Interactive Mode")
@@ -73,10 +83,8 @@ class YouTubeTopicSeeker:
                 elif choice == '7':
                     self._channel_management_interactive()
                 elif choice == '8':
-                    self._data_migration_interactive()
+                    self._date_filter_settings_interactive()
                 elif choice == '9':
-                    if send_email:
-                        self._send_completion_email("Interactive session completed")
                     print("\\n👋 Thanks for using YouTube Topic Seeker!")
                     break
                 else:
@@ -84,63 +92,127 @@ class YouTubeTopicSeeker:
                     
             except KeyboardInterrupt:
                 print("\\n\\n🛑 Operation interrupted by user.")
-                if send_email:
-                    self._send_completion_email("Session interrupted by user")
                 break
             except Exception as e:
                 self.logger.error(f"Unexpected error in interactive mode: {e}")
                 print(f"❌ Unexpected error: {e}")
     
-    def run_automatic(self, channel_url: str, send_email: bool = False):
-        """Run automatic processing for a specific channel"""
+    def run_automatic(self, channel_urls: list):
+        """Run automatic processing for multiple channels"""
         print("="*60)
         print("🎯 YouTube Topic Seeker - Automatic Mode")
         print("="*60)
-        print(f"📺 Processing channel: {channel_url}")
+        print(f"📺 Processing {len(channel_urls)} channel(s)")
         
-        try:
-            # Phase 1: Download channel data
-            print("📥 Phase 1: Downloading videos...")
-            results1 = self.downloader.process_channel(channel_url, incremental=True)
-            if results1.get('success_rate', 0) == 0:
-                print("❌ Phase 1 failed, stopping pipeline")
-                return
+        total_success = 0
+        total_failed = 0
+        results_summary = []
+        
+        for i, channel_url in enumerate(channel_urls, 1):
+            print(f"\n🔄 Processing channel {i}/{len(channel_urls)}: {channel_url}")
+            print("-" * 50)
             
-            new_videos = len(results1['processed_videos'])
-            print(f"✅ Phase 1 completed: {new_videos} new videos processed")
-            
-            if new_videos == 0:
-                print("ℹ️ No new videos found, pipeline completed")
-                return
-            
-            # Phase 2: Enhance transcripts
-            print("✨ Phase 2: Enhancing transcripts...")
-            results2 = self.enhancer.process_all_videos(incremental=True)
-            if results2.get('success_count', 0) == 0:
-                print("❌ Phase 2 failed, stopping pipeline")
-                return
-            
-            print(f"✅ Phase 2 completed: {results2['success_count']} enhanced transcripts")
-            
-            # Phase 3: Build vector store
-            print("🏗️ Phase 3: Building vector store...")
-            results3 = self.rag.build_vectorstore(incremental=True)
-            if not results3.get('success'):
-                print(f"❌ Phase 3 failed: {results3.get('error')}")
-                return
-            
-            print("✅ Phase 3 completed: Vector store updated")
-            print("🎉 Full pipeline completed successfully!")
-            print("🔍 You can now search for topics in your videos.")
-            
-            if send_email:
-                self._send_completion_email(f"Automatic processing of {channel_url} completed")
+            try:
+                # Phase 1: Download channel data
+                print("📥 Phase 1: Downloading videos...")
+                results1 = self.downloader.process_channel(channel_url, incremental=True)
+                if results1.get('success_rate', 0) == 0:
+                    print(f"❌ Phase 1 failed for {channel_url}, skipping to next channel")
+                    total_failed += 1
+                    results_summary.append({
+                        'channel': channel_url,
+                        'status': 'failed',
+                        'phase': 'Phase 1',
+                        'error': 'Phase 1 failed'
+                    })
+                    continue
                 
-        except Exception as e:
-            self.logger.error(f"Automatic processing failed: {e}")
-            print(f"❌ Automatic processing failed: {e}")
-            if send_email:
-                self._send_completion_email(f"Automatic processing of {channel_url} failed: {e}")
+                new_videos = len(results1['processed_videos'])
+                print(f"✅ Phase 1 completed: {new_videos} new videos processed")
+                
+                if new_videos == 0:
+                    print(f"ℹ️ No new videos found for {channel_url}")
+                    total_success += 1
+                    results_summary.append({
+                        'channel': channel_url,
+                        'status': 'success',
+                        'phase': 'completed',
+                        'new_videos': 0
+                    })
+                    continue
+                
+                # Phase 2: Enhance transcripts
+                print("✨ Phase 2: Enhancing transcripts...")
+                results2 = self.enhancer.process_all_videos(incremental=True)
+                if results2.get('success_count', 0) == 0:
+                    print(f"❌ Phase 2 failed for {channel_url}, skipping to next channel")
+                    total_failed += 1
+                    results_summary.append({
+                        'channel': channel_url,
+                        'status': 'failed',
+                        'phase': 'Phase 2',
+                        'error': 'Phase 2 failed'
+                    })
+                    continue
+                
+                print(f"✅ Phase 2 completed: {results2['success_count']} enhanced transcripts")
+                
+                # Phase 3: Build vector store
+                print("🏗️ Phase 3: Building vector store...")
+                results3 = self.rag.build_vectorstore(incremental=True)
+                if not results3.get('success'):
+                    print(f"❌ Phase 3 failed for {channel_url}: {results3.get('error')}")
+                    total_failed += 1
+                    results_summary.append({
+                        'channel': channel_url,
+                        'status': 'failed',
+                        'phase': 'Phase 3',
+                        'error': results3.get('error')
+                    })
+                    continue
+                
+                print(f"✅ Phase 3 completed: Vector store updated for {channel_url}")
+                total_success += 1
+                results_summary.append({
+                    'channel': channel_url,
+                    'status': 'success',
+                    'phase': 'completed',
+                    'new_videos': new_videos
+                })
+                
+            except Exception as e:
+                self.logger.error(f"Automatic processing failed for {channel_url}: {e}")
+                print(f"❌ Automatic processing failed for {channel_url}: {e}")
+                total_failed += 1
+                results_summary.append({
+                    'channel': channel_url,
+                    'status': 'failed',
+                    'phase': 'exception',
+                    'error': str(e)
+                })
+        
+        # Final summary
+        print("\n" + "="*60)
+        print("📊 PROCESSING SUMMARY")
+        print("="*60)
+        print(f"✅ Successful: {total_success} channels")
+        print(f"❌ Failed: {total_failed} channels")
+        print(f"📈 Success Rate: {(total_success / len(channel_urls)) * 100:.1f}%")
+        
+        if results_summary:
+            print("\n📋 Detailed Results:")
+            for result in results_summary:
+                status_icon = "✅" if result['status'] == 'success' else "❌"
+                print(f"{status_icon} {result['channel']}: {result['phase']}")
+                if result['status'] == 'success' and 'new_videos' in result:
+                    print(f"   📺 New videos: {result['new_videos']}")
+                elif result['status'] == 'failed':
+                    print(f"   ❌ Error: {result['error']}")
+        
+        if total_success > 0:
+            print("\n🎉 Processing completed!")
+            print("🔍 You can now search for topics in your videos.")
+        
     
     def _show_main_menu(self) -> str:
         """Show main menu and get user choice"""
@@ -154,7 +226,7 @@ class YouTubeTopicSeeker:
         print("5. 🔍 Search Topics")
         print("6. 📊 Show Status")
         print("7. 📺 Channel Management")
-        print("8. 🔄 Data Migration")
+        print("8. ⏰ Date Filter Settings")
         print("9. 🚪 Exit")
         print("-"*40)
         
@@ -591,34 +663,9 @@ class YouTubeTopicSeeker:
                 else:
                     print("     🏗️ Phase 3: Not built")
         else:
-            # Legacy single-channel mode
-            print("📺 Legacy Single-Channel Mode")
-            
-            # Phase 1 status
-            phase1_dirs = list(self.config.get_phase1_path().glob("*"))
-            phase1_videos = len([d for d in phase1_dirs if d.is_dir()])
-            print(f"📥 Phase 1 (Raw Data): {phase1_videos} video directories")
-            
-            # Phase 2 status
-            phase2_files = list(self.config.get_phase2_path().glob("*_enhanced.json"))
-            print(f"✨ Phase 2 (Enhanced): {len(phase2_files)} enhanced transcripts")
-            
-            # Phase 3 status
-            vectorstore_path = self.config.get_vectorstore_path()
-            vectorstore_exists = vectorstore_path.exists()
-            build_info_file = vectorstore_path / "build_info.json"
-            
-            if vectorstore_exists and build_info_file.exists():
-                try:
-                    import json
-                    with open(build_info_file, 'r') as f:
-                        build_info = json.load(f)
-                    print(f"🏗️ Phase 3 (Vector Store): Ready ({build_info.get('total_chunks', 0)} chunks)")
-                    print(f"   📅 Built: {build_info.get('built_at', 'Unknown')}")
-                except:
-                    print("🏗️ Phase 3 (Vector Store): Exists (details unavailable)")
-            else:
-                print("🏗️ Phase 3 (Vector Store): Not built")
+            # No enabled channels
+            print("⚠️ No enabled channels found")
+            print("   Configure channels using Channel Management (option 7)")
         
         # Configuration status
         print(f"⚙️ Configuration:")
@@ -629,42 +676,6 @@ class YouTubeTopicSeeker:
         if self.config.proxy.enabled:
             print(f"   🔀 Proxy: {self.config.proxy.type}://{self.config.proxy.host}:{self.config.proxy.port}")
         print(f"   📧 Email Notifications: {self.config.email.enabled}")
-    
-    def _send_completion_email(self, message: str):
-        """Send completion notification email"""
-        if not self.config.email.enabled:
-            return
-        
-        try:
-            from email.mime.text import MimeText
-            from email.mime.multipart import MimeMultipart
-            
-            msg = MimeMultipart()
-            msg['From'] = self.config.email.username
-            msg['To'] = self.config.email.recipient
-            msg['Subject'] = "YouTube Topic Seeker - Process Complete"
-            
-            body = f"""
-YouTube Topic Seeker Notification
-
-Status: {message}
-Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-This is an automated notification from YouTube Topic Seeker.
-            """
-            
-            msg.attach(MimeText(body, 'plain'))
-            
-            server = smtplib.SMTP(self.config.email.smtp_server, self.config.email.smtp_port)
-            server.starttls()
-            server.login(self.config.email.username, self.config.email.password)
-            server.send_message(msg)
-            server.quit()
-            
-            self.logger.info("Completion email sent successfully")
-            
-        except Exception as e:
-            self.logger.error(f"Failed to send email notification: {e}")
     
     def _channel_management_interactive(self):
         """Interactive channel management"""
@@ -1077,243 +1088,165 @@ This is an automated notification from YouTube Topic Seeker.
         except ValueError:
             print("❌ Invalid input. Please enter a number.")
 
-    def _data_migration_interactive(self):
-        """Interactive data migration"""
-        print("="*50)
-        print("🔄 Data Migration Tool")
-        print("="*50)
-        print("This tool migrates existing single-channel data to multi-channel structure.")
-        print("⚠️  It's recommended to backup your data before migration.")
-        
+    def _date_filter_settings_interactive(self):
+        """Interactive date filter settings"""
         while True:
+            print("="*50)
+            print("⏰ Date Filter Settings")
+            print("="*50)
+            
+            # Show current settings
+            date_config = self.config.phase1.date_filter
+            print(f"📊 Current Settings:")
+            print(f"   ✓ Enabled: {date_config.enabled}")
+            print(f"   🎯 Mode: {date_config.mode}")
+            if date_config.mode == "recent":
+                print(f"   📅 Default Months: {date_config.default_months} months")
+            elif date_config.mode == "since":
+                print(f"   📅 Since Date: {date_config.since_date or 'Not set'}")
+            
             print("-"*40)
-            print("Migration Options:")
+            print("Date Filter Options:")
             print("-"*40)
-            print("1. 📊 Analyze Existing Data")
-            print("2. 📋 Create Migration Plan")
-            print("3. 🔄 Execute Migration")
-            print("4. ✅ Verify Migration")
-            print("5. 📄 Generate Report")
-            print("6. 🔙 Back to Main Menu")
+            print("1. 🔄 Enable/Disable Date Filter")
+            print("2. 📅 Set to Recent Mode (past N months)")
+            print("3. 📆 Set to Since Mode (from specific date)")
+            print("4. 🌐 Set to All Mode (no date filtering)")
+            print("5. 🔙 Back to Main Menu")
             print("-"*40)
             
-            choice = input("➤ Choose migration option (1-6): ").strip()
+            choice = input("➤ Choose an option (1-5): ").strip()
             
             if choice == '1':
-                self._analyze_existing_data()
+                self._toggle_date_filter()
             elif choice == '2':
-                self._create_migration_plan()
+                self._set_recent_mode()
             elif choice == '3':
-                self._execute_migration()
+                self._set_since_mode()
             elif choice == '4':
-                self._verify_migration()
+                self._set_all_mode()
             elif choice == '5':
-                self._generate_migration_report()
-            elif choice == '6':
                 break
             else:
                 print("❌ Invalid choice. Please try again.")
     
-    def _analyze_existing_data(self):
-        """Analyze existing data structure"""
-        print("🔍 Analyzing existing data structure...")
+    def _toggle_date_filter(self):
+        """Toggle date filter on/off"""
+        current_enabled = self.config.phase1.date_filter.enabled
+        new_enabled = not current_enabled
         
         try:
-            analysis = self.data_migrator.analyze_existing_data()
-            
-            print("📊 Analysis Results:")
-            print("=" * 40)
-            
-            # Phase 1 analysis
-            phase1 = analysis['phase1']
-            print(f"📥 Phase 1 Data:")
-            print(f"  Path: {phase1['path']}")
-            print(f"  Exists: {'✅' if phase1['exists'] else '❌'}")
-            if phase1['exists']:
-                print(f"  Videos: {phase1['total_videos']}")
-                print(f"  Channel Info: {'✅' if phase1.get('channel_info') else '❌'}")
-            
-            # Phase 2 analysis
-            phase2 = analysis['phase2']
-            print(f"✨ Phase 2 Data:")
-            print(f"  Path: {phase2['path']}")
-            print(f"  Exists: {'✅' if phase2['exists'] else '❌'}")
-            if phase2['exists']:
-                print(f"  Enhanced Files: {phase2['total_enhanced']}")
-                print(f"  Summaries: {'✅' if phase2['has_summaries'] else '❌'}")
-            
-            # Phase 3 analysis
-            phase3 = analysis['phase3']
-            print(f"🏗️  Phase 3 Data:")
-            print(f"  Path: {phase3['path']}")
-            print(f"  Exists: {'✅' if phase3['exists'] else '❌'}")
-            if phase3['exists']:
-                print(f"  Build Info: {'✅' if phase3['has_build_info'] else '❌'}")
-                print(f"  Vector Files: {len(phase3['vector_files'])}")
-            
-            # Save analysis for later use
-            self._last_analysis = analysis
-            
-        except Exception as e:
-            self.logger.error(f"Data analysis failed: {e}")
-            print(f"❌ Analysis failed: {e}")
-    
-    def _create_migration_plan(self):
-        """Create migration plan"""
-        if not hasattr(self, '_last_analysis'):
-            print("❌ Please run data analysis first.")
-            return
-        
-        print("📋 Creating migration plan...")
-        
-        try:
-            plan = self.data_migrator.create_migration_plan(self._last_analysis)
-            
-            print("📋 Migration Plan:")
-            print("=" * 40)
-            print(f"Target Channel: {plan['target_channel']['name']} ({plan['target_channel']['id']})")
-            print(f"Estimated Items: {plan['estimated_items']}")
-            print(f"Backup Required: {'✅' if plan['backup_required'] else '❌'}")
-            
-            print("📝 Migration Steps:")
-            for i, step in enumerate(plan['migration_steps'], 1):
-                print(f"{i}. {step['description']}")
-                print(f"   Source: {step['source_path']}")
-                print(f"   Target: {step['target_path']}")
-                print(f"   Items: {step['items_count']}")
-            
-            # Save plan for later use
-            self._migration_plan = plan
-            
-        except Exception as e:
-            self.logger.error(f"Migration plan creation failed: {e}")
-            print(f"❌ Plan creation failed: {e}")
-    
-    def _execute_migration(self):
-        """Execute migration"""
-        if not hasattr(self, '_migration_plan'):
-            print("❌ Please create migration plan first.")
-            return
-        
-        print("⚠️  IMPORTANT: This operation will modify your data structure.")
-        print("It's highly recommended to backup your data before proceeding.")
-        
-        confirm = input("➤ Do you want to proceed with migration? (yes/no): ").strip().lower()
-        if confirm != 'yes':
-            print("Migration cancelled.")
-            return
-        
-        create_backup = input("➤ Create backup before migration? (yes/no): ").strip().lower()
-        backup = create_backup == 'yes'
-        
-        print("🔄 Executing migration...")
-        print("⏱️  This may take several minutes...")
-        
-        try:
-            summary = self.data_migrator.execute_migration(self._migration_plan, backup)
-            
-            print("📊 Migration Summary:")
-            print("=" * 40)
-            print(f"Total Items: {summary.total_items}")
-            print(f"Successful: {summary.successful_items}")
-            print(f"Failed: {summary.failed_items}")
-            if summary.total_items > 0:
-                success_rate = (summary.successful_items / summary.total_items) * 100
-                print(f"Success Rate: {success_rate:.1f}%")
-            
-            print(f"Target Channel: {summary.default_channel_id}")
-            print(f"Started: {summary.started_at}")
-            print(f"Completed: {summary.completed_at}")
-            
-            if summary.failed_items > 0:
-                print(f"⚠️  {summary.failed_items} items failed. Check logs for details.")
-            
-            # Save summary for verification
-            self._migration_summary = summary
-            
-        except Exception as e:
-            self.logger.error(f"Migration execution failed: {e}")
-            print(f"❌ Migration failed: {e}")
-    
-    def _verify_migration(self):
-        """Verify migration integrity"""
-        if not hasattr(self, '_migration_summary'):
-            print("❌ Please execute migration first.")
-            return
-        
-        print("✅ Verifying migration integrity...")
-        
-        try:
-            verification = self.data_migrator.verify_migration(self._migration_summary)
-            
-            print("🔍 Verification Results:")
-            print("=" * 40)
-            print(f"Overall Success: {'✅' if verification['overall_success'] else '❌'}")
-            print(f"Channel ID: {verification['channel_id']}")
-            
-            for phase in ['phase1', 'phase2', 'phase3']:
-                phase_verify = verification[f'{phase}_verification']
-                if 'verified_items' in phase_verify:
-                    status = '✅' if phase_verify['success'] else '❌'
-                    print(f"{phase.upper()}: {status} {phase_verify['verified_items']}/{phase_verify['total_items']} verified")
-                else:
-                    print(f"{phase.upper()}: {phase_verify.get('message', 'No data')}")
-            
-            print(f"Verified at: {verification['verified_at']}")
-            
-            # Save verification for report
-            self._verification_result = verification
-            
-        except Exception as e:
-            self.logger.error(f"Migration verification failed: {e}")
-            print(f"❌ Verification failed: {e}")
-    
-    def _generate_migration_report(self):
-        """Generate migration report"""
-        if not hasattr(self, '_migration_summary') or not hasattr(self, '_verification_result'):
-            print("❌ Please execute migration and verification first.")
-            return
-        
-        print("📄 Generating migration report...")
-        
-        try:
-            report = self.data_migrator.generate_migration_report(
-                self._migration_summary,
-                self._verification_result
+            self.config.update_date_filter_config(
+                mode=self.config.phase1.date_filter.mode,
+                default_months=self.config.phase1.date_filter.default_months,
+                since_date=self.config.phase1.date_filter.since_date,
+                enabled=new_enabled
             )
-            
-            print(report)
-            
-            # Save report to file
-            report_file = Path("./data/migration_report.txt")
-            report_file.parent.mkdir(parents=True, exist_ok=True)
-            
-            with open(report_file, 'w', encoding='utf-8') as f:
-                f.write(report)
-            
-            print(f"📄 Report saved to: {report_file}")
-            
+            status = "enabled" if new_enabled else "disabled"
+            print(f"✅ Date filter {status} successfully!")
         except Exception as e:
-            self.logger.error(f"Report generation failed: {e}")
-            print(f"❌ Report generation failed: {e}")
+            print(f"❌ Failed to update date filter: {e}")
+    
+    def _set_recent_mode(self):
+        """Set date filter to recent mode"""
+        print("="*50)
+        print("📅 Recent Mode Settings")
+        print("="*50)
+        print("This will download videos from the past N months.")
+        
+        try:
+            months_input = input(f"➤ Enter number of months (current: {self.config.phase1.date_filter.default_months}): ").strip()
+            if months_input:
+                months = int(months_input)
+                if months <= 0:
+                    print("❌ Number of months must be positive.")
+                    return
+            else:
+                months = self.config.phase1.date_filter.default_months
+            
+            self.config.update_date_filter_config(
+                mode="recent",
+                default_months=months,
+                since_date=None,
+                enabled=True
+            )
+            print(f"✅ Date filter set to recent mode: past {months} months")
+        except ValueError:
+            print("❌ Invalid input. Please enter a valid number.")
+        except Exception as e:
+            print(f"❌ Failed to update settings: {e}")
+    
+    def _set_since_mode(self):
+        """Set date filter to since mode"""
+        print("="*50)
+        print("📆 Since Mode Settings")
+        print("="*50)
+        print("This will download videos since a specific date.")
+        print("Date format: YYYY-MM-DD (e.g., 2024-01-01)")
+        
+        date_input = input("➤ Enter start date: ").strip()
+        if not date_input:
+            print("❌ Date is required for since mode.")
+            return
+        
+        # Validate date format
+        try:
+            from datetime import datetime
+            datetime.strptime(date_input, "%Y-%m-%d")
+        except ValueError:
+            print("❌ Invalid date format. Please use YYYY-MM-DD format.")
+            return
+        
+        try:
+            self.config.update_date_filter_config(
+                mode="since",
+                default_months=self.config.phase1.date_filter.default_months,
+                since_date=date_input,
+                enabled=True
+            )
+            print(f"✅ Date filter set to since mode: videos since {date_input}")
+        except Exception as e:
+            print(f"❌ Failed to update settings: {e}")
+    
+    def _set_all_mode(self):
+        """Set date filter to all mode"""
+        print("="*50)
+        print("🌐 All Mode Settings")
+        print("="*50)
+        print("This will download ALL videos from channels (no date filtering).")
+        
+        confirm = input("➤ Are you sure? This may download a lot of videos (y/N): ").strip().lower()
+        if confirm != 'y':
+            print("❌ All mode cancelled.")
+            return
+        
+        try:
+            self.config.update_date_filter_config(
+                mode="all",
+                default_months=self.config.phase1.date_filter.default_months,
+                since_date=self.config.phase1.date_filter.since_date,
+                enabled=True
+            )
+            print("✅ Date filter set to all mode: no date filtering")
+        except Exception as e:
+            print(f"❌ Failed to update settings: {e}")
+
 
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description='YouTube Topic Seeker')
-    parser.add_argument('--config', help='Configuration file path')
-    parser.add_argument('--email', action='store_true', help='Send email notifications')
-    parser.add_argument('channel_url', nargs='?', help='YouTube channel URL to process automatically')
+    parser.add_argument('channel_urls', nargs='*', help='YouTube channel URLs to process automatically')
     
     args = parser.parse_args()
     
     try:
-        app = YouTubeTopicSeeker(args.config)
-        if args.channel_url:
-            # 自動処理モード
-            app.run_automatic(args.channel_url, args.email)
+        app = YouTubeTopicSeeker()
+        if args.channel_urls:
+            # 自動処理モード（複数チャンネル対応）
+            app.run_automatic(args.channel_urls)
         else:
             # 対話モード
-            app.run_interactive(args.email)
+            app.run_interactive()
     except KeyboardInterrupt:
         print("🛑 Application interrupted by user")
     except Exception as e:

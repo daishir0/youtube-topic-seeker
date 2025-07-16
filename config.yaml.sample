@@ -19,11 +19,15 @@ youtube:
   max_videos_per_channel: 0
   # Skip videos older than N days (0 = no limit)
   max_age_days: 0
-  # Bot detection avoidance settings
+  # Enhanced bot detection avoidance settings
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-  sleep_interval: 2  # Request interval in seconds
+  sleep_interval: 3  # Base request interval in seconds
   random_sleep: true
-  max_sleep: 5  # Maximum random sleep time
+  min_sleep: 2  # Minimum random sleep time
+  max_sleep: 8  # Maximum random sleep time
+  request_timeout: 30  # Request timeout in seconds
+  max_retries: 5  # Maximum retry attempts for bot detection errors
+  retry_sleep: 10  # Base sleep time between retries (exponential backoff)
 
 # Phase 1: Data Download Settings
 phase1:

@@ -33,8 +33,63 @@ class YouTubeDownloader:
         self.channel_manager = ChannelManager(config)
     
     def sanitize_filename(self, filename: str) -> str:
-        """Sanitize filename for safe storage"""
-        return re.sub(r'[\\/*?:"<>|]', "", filename).strip()
+        """Sanitize filename for safe storage with length limit"""
+        # Remove invalid characters
+        sanitized = re.sub(r'[\\/*?:"<>|]', "", filename).strip()
+        
+        # Limit filename length to prevent Windows path length issues
+        # Windows has a 260 character path limit, so we limit filename to 100 characters
+        # to leave room for directory path and extensions
+        max_length = 100
+        if len(sanitized) > max_length:
+            # Truncate but try to keep meaningful part
+            sanitized = sanitized[:max_length-3] + "..."
+        
+        return sanitized
+    
+    def _get_date_filter_option(self) -> Optional[str]:
+        """Generate yt-dlp date filter option based on configuration"""
+        date_config = self.config.phase1.date_filter
+        
+        if not date_config.enabled:
+            return None
+            
+        if date_config.mode == "all":
+            return None
+        elif date_config.mode == "recent":
+            # Calculate date N months ago
+            from datetime import datetime, timedelta
+            import calendar
+            
+            today = datetime.now()
+            months_ago = date_config.default_months
+            
+            # Calculate target date approximately N months ago
+            target_year = today.year
+            target_month = today.month - months_ago
+            
+            while target_month <= 0:
+                target_month += 12
+                target_year -= 1
+            
+            # Get the last day of the target month to ensure we include the whole month
+            last_day = calendar.monthrange(target_year, target_month)[1]
+            target_date = datetime(target_year, target_month, last_day)
+            
+            # Format as YYYYMMDD for yt-dlp
+            return target_date.strftime("%Y%m%d")
+            
+        elif date_config.mode == "since" and date_config.since_date:
+            try:
+                # Parse YYYY-MM-DD format
+                from datetime import datetime
+                target_date = datetime.strptime(date_config.since_date, "%Y-%m-%d")
+                return target_date.strftime("%Y%m%d")
+            except ValueError:
+                logger.warning(f"Invalid since_date format: {date_config.since_date}. Expected YYYY-MM-DD")
+                return None
+        
+        return None
     
     def extract_channel_id(self, url: str) -> Optional[str]:
         """Extract channel ID or handle from URL"""
@@ -56,16 +111,13 @@ class YouTubeDownloader:
             'quiet': True,
             'extract_flat': True,
             'playlistend': self.config.youtube.max_videos_per_channel or None,
-            # Bot detection avoidance
-            'user_agent': self.config.youtube.user_agent,
-            'sleep_interval': self.config.youtube.sleep_interval,
-            'extractor_args': {
-                'youtube': {
-                    'player_skip': ['webpage'],
-                    'skip': ['dash']
-                }
-            }
         }
+        
+        # Add date filter if configured
+        date_after = self._get_date_filter_option()
+        if date_after:
+            ydl_opts['dateafter'] = date_after
+            logger.info(f"Applying date filter: videos after {date_after}")
         
         # Add proxy settings if enabled
         proxy_url = self.config.get_proxy_url()
@@ -76,40 +128,109 @@ class YouTubeDownloader:
         logger.debug(f"Using User-Agent: {self.config.youtube.user_agent[:50]}...")
         
         video_urls = []
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Try different channel URL formats
-                for url_format in [
-                    f"{channel_url}/videos",
-                    f"{channel_url}/streams", 
-                    channel_url
-                ]:
-                    try:
-                        logger.debug(f"Trying URL format: {url_format}")
-                        info = ydl.extract_info(url_format, download=False)
-                        
-                        if 'entries' in info:
-                            for entry in info['entries']:
-                                if entry and 'id' in entry:
-                                    video_id = entry['id']
-                                    video_url = f"https://www.youtube.com/watch?v={video_id}"
-                                    
-                                    # Check age filter
-                                    if self.config.youtube.max_age_days > 0:
-                                        upload_date = entry.get('upload_date')
-                                        if upload_date and self._is_too_old(upload_date):
-                                            continue
-                                    
-                                    video_urls.append(video_url)
-                            break  # Success, no need to try other formats
-                    except Exception as e:
-                        logger.debug(f"Failed with {url_format}: {e}")
-                        continue
-                        
-        except Exception as e:
-            logger.error(f"Failed to extract channel videos: {e}")
+        
+        # Try multiple approaches for maximum compatibility
+        approaches = [
+            # Approach 1: Standard extraction
+            lambda: self._extract_with_standard_method(ydl_opts, channel_url),
+            # Approach 2: Fallback with minimal options
+            lambda: self._extract_with_fallback_method(channel_url),
+        ]
+        
+        for i, approach in enumerate(approaches, 1):
+            try:
+                logger.debug(f"Trying extraction approach {i}")
+                video_urls = approach()
+                if video_urls:
+                    logger.info(f"Successfully extracted videos using approach {i}")
+                    break
+            except Exception as e:
+                logger.debug(f"Approach {i} failed: {e}")
+                continue
+        
+        if not video_urls:
+            logger.error(f"All extraction approaches failed for {channel_url}")
             
         logger.info(f"Found {len(video_urls)} videos to download")
+        return video_urls
+    
+    def _extract_with_standard_method(self, ydl_opts: dict, channel_url: str) -> List[str]:
+        """Standard extraction method with full options"""
+        video_urls = []
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # Try different channel URL formats
+            for url_format in [
+                f"{channel_url}/videos",
+                f"{channel_url}/streams",
+                channel_url
+            ]:
+                try:
+                    logger.debug(f"Trying URL format: {url_format}")
+                    info = ydl.extract_info(url_format, download=False)
+                    
+                    if 'entries' in info:
+                        for entry in info['entries']:
+                            if entry and 'id' in entry:
+                                video_id = entry['id']
+                                video_url = f"https://www.youtube.com/watch?v={video_id}"
+                                
+                                # Check age filter
+                                if self.config.youtube.max_age_days > 0:
+                                    upload_date = entry.get('upload_date')
+                                    if upload_date and self._is_too_old(upload_date):
+                                        continue
+                                
+                                video_urls.append(video_url)
+                        break  # Success, no need to try other formats
+                except Exception as e:
+                    logger.debug(f"Failed with {url_format}: {e}")
+                    continue
+        return video_urls
+    
+    def _extract_with_fallback_method(self, channel_url: str) -> List[str]:
+        """Fallback extraction method with minimal options"""
+        video_urls = []
+        
+        # Minimal options for maximum compatibility
+        minimal_opts = {
+            'quiet': True,
+            'extract_flat': True,
+            'force_ipv4': True,
+            'socket_timeout': 30,
+            'retries': 3,
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0',
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android'],
+                    'skip': ['dash', 'hls', 'translated_subs'],
+                    'player_skip': ['js', 'configs', 'webpage']
+                }
+            }
+        }
+        
+        # Add proxy if available
+        proxy_url = self.config.get_proxy_url()
+        if proxy_url:
+            minimal_opts['proxy'] = proxy_url
+        
+        try:
+            with yt_dlp.YoutubeDL(minimal_opts) as ydl:
+                # Try only the main channel URL
+                info = ydl.extract_info(f"{channel_url}/videos", download=False)
+                
+                if 'entries' in info:
+                    for entry in info['entries']:
+                        if entry and 'id' in entry:
+                            video_id = entry['id']
+                            video_url = f"https://www.youtube.com/watch?v={video_id}"
+                            video_urls.append(video_url)
+                            
+                            # Limit to prevent overwhelming in fallback mode
+                            if len(video_urls) >= 20:
+                                break
+        except Exception as e:
+            logger.debug(f"Fallback method failed: {e}")
+            
         return video_urls
     
     def _is_too_old(self, upload_date: str) -> bool:
@@ -127,16 +248,48 @@ class YouTubeDownloader:
         
         # Add random sleep to avoid being detected as bot
         if self.config.youtube.random_sleep:
-            sleep_time = random.uniform(1, self.config.youtube.max_sleep)
+            sleep_time = random.uniform(self.config.youtube.min_sleep, self.config.youtube.max_sleep)
             logger.debug(f"Random sleep: {sleep_time:.1f} seconds")
             time.sleep(sleep_time)
         
+        # Retry mechanism for bot detection errors
+        for attempt in range(self.config.youtube.max_retries):
+            try:
+                # First, extract comprehensive video metadata
+                metadata = self._extract_video_metadata(video_url)
+                if not metadata:
+                    if attempt < self.config.youtube.max_retries - 1:
+                        logger.warning(f"Failed to extract metadata for {video_url}, retrying in {self.config.youtube.retry_sleep} seconds (attempt {attempt + 1}/{self.config.youtube.max_retries})")
+                        time.sleep(self.config.youtube.retry_sleep)
+                        continue
+                    else:
+                        logger.error(f"Failed to extract metadata for {video_url} after {self.config.youtube.max_retries} attempts")
+                        return None
+                
+                break  # Success, exit retry loop
+                
+            except Exception as e:
+                error_msg = str(e).lower()
+                if ('sign in to confirm' in error_msg or 'bot' in error_msg or
+                    'failed to extract any player response' in error_msg or
+                    'getaddrinfo failed' in error_msg):
+                    if attempt < self.config.youtube.max_retries - 1:
+                        retry_sleep = self.config.youtube.retry_sleep * (attempt + 1)  # Exponential backoff
+                        logger.warning(f"YouTube access issue for {video_url}, retrying in {retry_sleep} seconds (attempt {attempt + 1}/{self.config.youtube.max_retries})")
+                        if 'failed to extract any player response' in error_msg:
+                            logger.info("Hint: Consider updating yt-dlp with: pip install --upgrade yt-dlp")
+                        time.sleep(retry_sleep)
+                        continue
+                    else:
+                        logger.error(f"YouTube access error persists for {video_url} after {self.config.youtube.max_retries} attempts: {e}")
+                        if 'failed to extract any player response' in error_msg:
+                            logger.error("This may be due to YouTube changes. Try updating yt-dlp: pip install --upgrade yt-dlp")
+                        return None
+                else:
+                    logger.error(f"Unexpected error processing {video_url}: {e}")
+                    return None
+        
         try:
-            # First, extract comprehensive video metadata
-            metadata = self._extract_video_metadata(video_url)
-            if not metadata:
-                logger.error(f"Failed to extract metadata for {video_url}")
-                return None
             
             video_id = metadata['id']
             safe_title = self.sanitize_filename(metadata['title'])
@@ -181,7 +334,13 @@ class YouTubeDownloader:
             with open(summary_file, 'w', encoding='utf-8') as f:
                 json.dump(summary, f, ensure_ascii=False, indent=2)
             
-            logger.info(f"Successfully processed: {metadata['title']}")
+            # Safe logging with encoding handling
+            try:
+                logger.info(f"Successfully processed: {metadata['title']}")
+            except UnicodeEncodeError:
+                # Fallback for Windows console encoding issues
+                safe_title = metadata['title'].encode('utf-8', errors='replace').decode('utf-8')
+                logger.info(f"Successfully processed: {safe_title}")
             return summary
             
         except Exception as e:
@@ -192,17 +351,6 @@ class YouTubeDownloader:
         """Extract comprehensive video metadata for context"""
         ydl_opts = {
             'quiet': True,
-            'no_warnings': True,
-            'extract_flat': False,
-            # Bot detection avoidance
-            'user_agent': self.config.youtube.user_agent,
-            'sleep_interval': self.config.youtube.sleep_interval,
-            'extractor_args': {
-                'youtube': {
-                    'player_skip': ['webpage'],
-                    'skip': ['dash']
-                }
-            }
         }
         
         # Add proxy settings if enabled
@@ -210,65 +358,85 @@ class YouTubeDownloader:
         if proxy_url:
             ydl_opts['proxy'] = proxy_url
         
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(video_url, download=False)
-                
-                # Extract comprehensive metadata
-                metadata = {
-                    'id': info.get('id'),
-                    'title': info.get('title'),
-                    'description': info.get('description', ''),
-                    'uploader': info.get('uploader'),
-                    'uploader_id': info.get('uploader_id'),
-                    'upload_date': info.get('upload_date'),
-                    'duration': info.get('duration'),
-                    'view_count': info.get('view_count'),
-                    'like_count': info.get('like_count'),
-                    'tags': info.get('tags', []),
-                    'categories': info.get('categories', []),
-                    'thumbnail': info.get('thumbnail'),
-                    'webpage_url': info.get('webpage_url'),
-                    'language': info.get('language'),
-                    'age_limit': info.get('age_limit'),
-                    'availability': info.get('availability'),
-                    'live_status': info.get('live_status'),
-                    'release_timestamp': info.get('release_timestamp'),
-                    'chapters': info.get('chapters', []),
-                    'automatic_captions': list(info.get('automatic_captions', {}).keys()),
-                    'subtitles': list(info.get('subtitles', {}).keys())
-                }
-                
-                # Add channel information if enabled
-                if self.config.phase1.include_channel_info:
-                    metadata.update({
-                        'channel': info.get('channel'),
-                        'channel_id': info.get('channel_id'),
-                        'channel_url': info.get('channel_url'),
-                        'channel_follower_count': info.get('channel_follower_count'),
-                        'uploader_url': info.get('uploader_url')
-                    })
-                
-                # Add format information for context
-                formats = info.get('formats', [])
-                if formats:
-                    metadata['available_formats'] = [
-                        {
-                            'format_id': f.get('format_id'),
-                            'ext': f.get('ext'),
-                            'quality': f.get('quality'),
-                            'language': f.get('language'),
-                            'acodec': f.get('acodec'),
-                            'vcodec': f.get('vcodec')
-                        }
-                        for f in formats[:5]  # Keep first 5 formats for context
-                    ]
-                
-                return metadata
-                
-        except Exception as e:
-            logger.error(f"Failed to extract metadata: {e}")
-            return None
+        for attempt in range(self.config.youtube.max_retries):
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(video_url, download=False)
+                    
+                    # Extract comprehensive metadata
+                    metadata = {
+                        'id': info.get('id'),
+                        'title': info.get('title'),
+                        'description': info.get('description', ''),
+                        'uploader': info.get('uploader'),
+                        'uploader_id': info.get('uploader_id'),
+                        'upload_date': info.get('upload_date'),
+                        'duration': info.get('duration'),
+                        'view_count': info.get('view_count'),
+                        'like_count': info.get('like_count'),
+                        'tags': info.get('tags', []),
+                        'categories': info.get('categories', []),
+                        'thumbnail': info.get('thumbnail'),
+                        'webpage_url': info.get('webpage_url'),
+                        'language': info.get('language'),
+                        'age_limit': info.get('age_limit'),
+                        'availability': info.get('availability'),
+                        'live_status': info.get('live_status'),
+                        'release_timestamp': info.get('release_timestamp'),
+                        'chapters': info.get('chapters', []),
+                        'automatic_captions': list(info.get('automatic_captions', {}).keys()),
+                        'subtitles': list(info.get('subtitles', {}).keys())
+                    }
+                    
+                    # Add channel information if enabled
+                    if self.config.phase1.include_channel_info:
+                        metadata.update({
+                            'channel': info.get('channel'),
+                            'channel_id': info.get('channel_id'),
+                            'channel_url': info.get('channel_url'),
+                            'channel_follower_count': info.get('channel_follower_count'),
+                            'uploader_url': info.get('uploader_url')
+                        })
+                    
+                    # Add format information for context
+                    formats = info.get('formats', [])
+                    if formats:
+                        metadata['available_formats'] = [
+                            {
+                                'format_id': f.get('format_id'),
+                                'ext': f.get('ext'),
+                                'quality': f.get('quality'),
+                                'language': f.get('language'),
+                                'acodec': f.get('acodec'),
+                                'vcodec': f.get('vcodec')
+                            }
+                            for f in formats[:5]  # Keep first 5 formats for context
+                        ]
+                    
+                    return metadata
+                    
+            except Exception as e:
+                error_msg = str(e).lower()
+                if ('sign in to confirm' in error_msg or 'bot' in error_msg or
+                    'failed to extract any player response' in error_msg or
+                    'getaddrinfo failed' in error_msg):
+                    if attempt < self.config.youtube.max_retries - 1:
+                        retry_sleep = self.config.youtube.retry_sleep * (attempt + 1)
+                        logger.warning(f"YouTube access issue detected, retrying in {retry_sleep} seconds (attempt {attempt + 1}/{self.config.youtube.max_retries})")
+                        if 'failed to extract any player response' in error_msg:
+                            logger.info("Hint: Consider updating yt-dlp with: pip install --upgrade yt-dlp")
+                        time.sleep(retry_sleep)
+                        continue
+                    else:
+                        logger.error(f"Failed to extract metadata after {self.config.youtube.max_retries} attempts: {e}")
+                        if 'failed to extract any player response' in error_msg:
+                            logger.error("This may be due to YouTube changes. Try updating yt-dlp: pip install --upgrade yt-dlp")
+                        return None
+                else:
+                    logger.error(f"Failed to extract metadata: {e}")
+                    return None
+        
+        return None
     
     def _download_timestamped_transcript(self, video_url: str, output_dir: Path) -> Optional[Dict[str, Any]]:
         """Download transcript with preserved timestamp information"""
@@ -280,18 +448,9 @@ class YouTubeDownloader:
             'writeautomaticsub': True,
             'subtitleslangs': self.config.youtube.subtitle_languages,
             'skip_download': True,
-            'outtmpl': str(output_dir / '%(title)s.%(ext)s'),
+            'outtmpl': str(output_dir / 'subtitle.%(ext)s'),  # Use simple filename to avoid path length issues
             'subtitlesformat': 'vtt',  # VTT preserves timestamps
             'quiet': True,
-            # Bot detection avoidance
-            'user_agent': self.config.youtube.user_agent,
-            'sleep_interval': self.config.youtube.sleep_interval,
-            'extractor_args': {
-                'youtube': {
-                    'player_skip': ['webpage'],
-                    'skip': ['dash']
-                }
-            }
         }
         
         # Add proxy settings if enabled
@@ -302,12 +461,11 @@ class YouTubeDownloader:
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_url, download=True)
-                title = self.sanitize_filename(info['title'])
                 
-                # Find the downloaded subtitle file
+                # Find the downloaded subtitle file with simple filename
                 for lang in self.config.youtube.subtitle_languages:
-                    # Try different subtitle file patterns
-                    for pattern in [f"{title}.{lang}.vtt", f"{title}.{lang}-auto.vtt"]:
+                    # Try different subtitle file patterns with simple filename
+                    for pattern in [f"subtitle.{lang}.vtt", f"subtitle.{lang}-auto.vtt"]:
                         subtitle_path = output_dir / pattern
                         if subtitle_path.exists():
                             # Process VTT to extract timestamped transcript

@@ -59,15 +59,18 @@ This will present a menu with options to:
 - Build vector store
 - Search topics
 - Manage channels
-- Migrate data
 
 ### Automatic Mode
-Process a YouTube channel automatically:
+Process one or multiple YouTube channels automatically:
 ```
+# Single channel
 python main.py https://www.youtube.com/@channel_name
+
+# Multiple channels
+python main.py https://www.youtube.com/@channel1 https://www.youtube.com/@channel2
 ```
 
-This will run the full pipeline (download, enhance, build vector store) for the specified channel.
+This will run the full pipeline (download, enhance, build vector store) for all specified channels, with comprehensive progress tracking and error handling.
 
 ### Search Examples
 After processing videos, you can search for topics:
@@ -154,15 +157,18 @@ python main.py
 - ベクトルストアの構築
 - トピック検索
 - チャンネル管理
-- データ移行
 
 ### 自動モード
-YouTubeチャンネルを自動的に処理します：
+単一または複数のYouTubeチャンネルを自動的に処理します：
 ```
+# 単一チャンネル
 python main.py https://www.youtube.com/@チャンネル名
+
+# 複数チャンネル
+python main.py https://www.youtube.com/@チャンネル1 https://www.youtube.com/@チャンネル2
 ```
 
-これにより、指定されたチャンネルに対して完全なパイプライン（ダウンロード、強化、ベクトルストア構築）が実行されます。
+これにより、指定されたすべてのチャンネルに対して完全なパイプライン（ダウンロード、強化、ベクトルストア構築）が実行され、包括的な進捗追跡とエラーハンドリングが提供されます。
 
 ### 検索例
 動画を処理した後、トピックを検索できます：

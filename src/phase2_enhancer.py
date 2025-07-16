@@ -52,6 +52,35 @@ class TranscriptEnhancer:
         # Enhancement prompts
         self.enhancement_prompts = self._load_enhancement_prompts()
     
+    def _extract_channel_id_from_path(self, video_dir: Path, default_channel_id: Optional[str] = None) -> Optional[str]:
+        """Extract channel ID from video directory path in multi-channel structure"""
+        try:
+            # For multi-channel structure: data/1-plain/channel_id/video_dir/
+            phase1_dir = self.config.get_phase1_path()
+            
+            # Get relative path from phase1_dir to video_dir
+            relative_path = video_dir.relative_to(phase1_dir)
+            path_parts = relative_path.parts
+            
+            if len(path_parts) >= 2:
+                # Multi-channel structure: channel_id/video_dir
+                potential_channel_id = path_parts[0]
+                logger.debug(f"Extracted channel ID from path: {potential_channel_id}")
+                return potential_channel_id
+            else:
+                # Should not happen in new structure, but handle gracefully
+                logger.error(f"Unexpected path structure for video: {video_dir}")
+                # Try to infer from parent directory name
+                parent_name = video_dir.parent.name
+                if parent_name != "1-plain":
+                    logger.debug(f"Using parent directory as channel ID: {parent_name}")
+                    return parent_name
+                return default_channel_id
+                
+        except Exception as e:
+            logger.error(f"Could not extract channel ID from path {video_dir}: {e}")
+            return default_channel_id
+    
     def _load_enhancement_prompts(self) -> Dict[str, str]:
         """Load context-aware enhancement prompts"""
         return {
@@ -190,13 +219,44 @@ CRITICAL RULES:
             with open(metadata_file, 'r', encoding='utf-8') as f:
                 metadata = json.load(f)
             
-            # Find transcript file
+            # Find transcript file with improved validation
             transcript_files = list(video_dir.glob("transcript_*.json"))
-            if not transcript_files:
-                logger.warning(f"No transcript found for {video_dir.name}")
-                return None
             
-            transcript_file = transcript_files[0]  # Use first available transcript
+            # Filter out invalid transcript files
+            valid_transcript_files = []
+            for tf in transcript_files:
+                try:
+                    # Check file size - should be substantial
+                    if tf.stat().st_size < 50:  # Too small to be a real transcript
+                        logger.warning(f"Transcript file too small, skipping: {tf.name}")
+                        continue
+                    
+                    # Try to load and validate JSON structure
+                    with open(tf, 'r', encoding='utf-8') as f:
+                        test_data = json.load(f)
+                    
+                    # Check if it has required transcript structure
+                    if 'segments' in test_data and isinstance(test_data['segments'], list):
+                        if len(test_data['segments']) > 0:
+                            valid_transcript_files.append(tf)
+                        else:
+                            logger.warning(f"Empty transcript segments in: {tf.name}")
+                    else:
+                        logger.warning(f"Invalid transcript structure in: {tf.name}")
+                        
+                except Exception as e:
+                    logger.warning(f"Could not validate transcript file {tf.name}: {e}")
+            
+            if not valid_transcript_files:
+                logger.debug(f"No valid transcript found for {video_dir.name} (video may not have transcript available)")
+                return {
+                    'video_id': metadata.get('id', video_dir.name),
+                    'status': 'no_transcript',
+                    'title': metadata.get('title', 'Unknown')
+                }
+            
+            transcript_file = valid_transcript_files[0]  # Use first valid transcript
+            logger.debug(f"Using transcript file: {transcript_file.name}")
             with open(transcript_file, 'r', encoding='utf-8') as f:
                 transcript_data = json.load(f)
             
@@ -523,7 +583,45 @@ CRITICAL RULES:
             logger.error(f"Input directory does not exist: {input_dir}")
             return {'success': False, 'error': f'Input directory not found: {input_dir}'}
         
-        video_dirs = [d for d in input_dir.iterdir() if d.is_dir()]
+        video_dirs = []
+        
+        # Improved multi-channel structure detection
+        def scan_for_video_directories(base_dir: Path) -> List[Path]:
+            """Recursively scan for video directories (containing metadata.json)"""
+            video_dirs = []
+            
+            def scan_directory(directory: Path, depth: int = 0):
+                if depth > 2:  # Limit recursion depth
+                    return
+                
+                try:
+                    for item in directory.iterdir():
+                        if not item.is_dir():
+                            continue
+                        
+                        # Check if this directory contains metadata.json (video directory)
+                        metadata_file = item / "metadata.json"
+                        if metadata_file.exists():
+                            # Verify it's actually a video directory by checking file size
+                            try:
+                                if metadata_file.stat().st_size > 100:  # Should be larger than 100 bytes
+                                    video_dirs.append(item)
+                                    logger.debug(f"Found video directory: {item.name}")
+                                else:
+                                    logger.warning(f"Metadata file too small, skipping: {item.name}")
+                            except Exception as e:
+                                logger.warning(f"Could not check metadata file size for {item.name}: {e}")
+                        else:
+                            # This might be a channel directory, recurse
+                            scan_directory(item, depth + 1)
+                except Exception as e:
+                    logger.warning(f"Could not scan directory {directory}: {e}")
+            
+            scan_directory(base_dir)
+            return video_dirs
+        
+        video_dirs = scan_for_video_directories(input_dir)
+        logger.info(f"Found {len(video_dirs)} video directories across all channels")
         
         # Filter for new videos only if incremental update is enabled
         if incremental:
@@ -536,6 +634,7 @@ CRITICAL RULES:
                     'enhanced_videos': [],
                     'failed_videos': [],
                     'skipped_videos': [],
+                    'no_transcript_videos': [],
                     'new_videos_count': 0,
                     'incremental_mode': incremental,
                     'channel_id': channel_id,
@@ -556,6 +655,7 @@ CRITICAL RULES:
             'enhanced_videos': [],
             'failed_videos': [],
             'skipped_videos': [],
+            'no_transcript_videos': [],
             'new_videos_count': len(video_dirs),
             'incremental_mode': incremental,
             'started_at': datetime.now().isoformat()
@@ -572,10 +672,13 @@ CRITICAL RULES:
             logger.info(f"Processing batch {i//batch_size + 1}: videos {i+1}-{min(i+batch_size, len(video_dirs))}")
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_to_video = {
-                    executor.submit(self.enhance_transcript, video_dir, channel_id): video_dir 
-                    for video_dir in batch
-                }
+                # Determine channel ID for each video directory
+                future_to_video = {}
+                
+                for video_dir in batch:
+                    # Extract channel ID from video directory path for multi-channel structure
+                    video_channel_id = self._extract_channel_id_from_path(video_dir, channel_id)
+                    future_to_video[executor.submit(self.enhance_transcript, video_dir, video_channel_id)] = video_dir
                 
                 for future in as_completed(future_to_video):
                     video_dir = future_to_video[future]
@@ -586,6 +689,11 @@ CRITICAL RULES:
                                 results['enhanced_videos'].append(result)
                             elif result.get('status') == 'skipped':
                                 results['skipped_videos'].append(result)
+                            elif result.get('status') == 'no_transcript':
+                                # Add a new category for videos without transcripts
+                                if 'no_transcript_videos' not in results:
+                                    results['no_transcript_videos'] = []
+                                results['no_transcript_videos'].append(result)
                         else:
                             results['failed_videos'].append(str(video_dir))
                     except Exception as e:
@@ -611,7 +719,8 @@ CRITICAL RULES:
             json.dump(results, f, ensure_ascii=False, indent=2)
         
         logger.info(f"Enhancement completed. Success rate: {results['success_rate']:.2%} "
-                   f"({results['success_count']}/{len(video_dirs)} videos)")
+                   f"({results['success_count']}/{len(video_dirs)} videos, "
+                   f"{len(results.get('no_transcript_videos', []))} without transcripts)")
         
         return results
     
