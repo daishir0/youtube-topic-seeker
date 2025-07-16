@@ -577,16 +577,31 @@ class TopicSearchRAG:
                 k=max_results * 2  # Get more results for better ranking
             )
             
-            # Filter by relevance threshold
+            logger.debug(f"Retrieved {len(docs_with_scores)} documents from vector store")
+            
+            # Filter by relevance threshold with dynamic adjustment
             relevant_docs = []
+            initial_threshold = self.config.rag.similarity_threshold
+            
+            logger.debug(f"Using similarity threshold: {initial_threshold}")
+            
             for doc, score in docs_with_scores:
                 # Lower score means higher similarity in Chroma
                 relevance = 1.0 - score  # Convert to 0-1 where 1 is most relevant
-                if relevance >= self.config.rag.similarity_threshold:
+                logger.debug(f"Document relevance: {relevance:.3f} (threshold: {initial_threshold})")
+                if relevance >= initial_threshold:
                     relevant_docs.append((doc, relevance))
             
+            # If no results with initial threshold, try with lower threshold
+            if not relevant_docs and initial_threshold > 0.3:
+                logger.info(f"No results found with threshold {initial_threshold}, trying with lower threshold 0.3")
+                for doc, score in docs_with_scores:
+                    relevance = 1.0 - score
+                    if relevance >= 0.3:
+                        relevant_docs.append((doc, relevance))
+            
             if not relevant_docs:
-                logger.info(f"No relevant results found for query: '{query}'")
+                logger.info(f"No relevant results found for query: '{query}' even with lower threshold")
                 return []
             
             # Sort by relevance (highest first)
