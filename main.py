@@ -62,7 +62,7 @@ class YouTubeTopicSeeker:
     
     def run_interactive(self):
         """Run interactive mode"""
-        print("\\n" + "="*60)
+        print("="*60)
         print("🎯 YouTube Topic Seeker - Interactive Mode")
         print("="*60)
         
@@ -87,13 +87,13 @@ class YouTubeTopicSeeker:
                 elif choice == '8':
                     self._date_filter_settings_interactive()
                 elif choice == '9':
-                    print("\\n👋 Thanks for using YouTube Topic Seeker!")
+                    print("👋 Thanks for using YouTube Topic Seeker!")
                     break
                 else:
                     print("❌ Invalid choice. Please try again.")
                     
             except KeyboardInterrupt:
-                print("\\n\\n🛑 Operation interrupted by user.")
+                print("🛑 Operation interrupted by user.")
                 break
             except Exception as e:
                 self.logger.error(f"Unexpected error in interactive mode: {e}")
@@ -162,7 +162,8 @@ class YouTubeTopicSeeker:
                 
                 # Phase 2: Enhance transcripts
                 print("✨ Phase 2: Enhancing transcripts...")
-                results2 = self.enhancer.process_all_videos(incremental=True)
+                channel_id = results1.get('channel_id')
+                results2 = self.enhancer.process_all_videos(incremental=True, channel_id=channel_id)
                 if results2.get('success_count', 0) == 0:
                     print(f"❌ Phase 2 failed for {channel_url}, skipping to next channel")
                     total_failed += 1
@@ -267,7 +268,8 @@ class YouTubeTopicSeeker:
                 
                 # Phase 2: Enhance transcripts
                 print("✨ Phase 2: Enhancing transcripts...")
-                results2 = self.enhancer.process_all_videos(incremental=True)
+                channel_id = results1.get('channel_id')
+                results2 = self.enhancer.process_all_videos(incremental=True, channel_id=channel_id)
                 if results2.get('success_count', 0) == 0:
                     print(f"❌ Phase 2 failed for videos")
                     total_failed += 1
@@ -342,7 +344,7 @@ class YouTubeTopicSeeker:
     
     def _show_main_menu(self) -> str:
         """Show main menu and get user choice"""
-        print("\\n" + "-"*40)
+        print("-"*40)
         print("📋 Main Menu")
         print("-"*40)
         print("1. 📥 Phase 1: Download YouTube Data")
@@ -356,27 +358,27 @@ class YouTubeTopicSeeker:
         print("9. 🚪 Exit")
         print("-"*40)
         
-        return input("\\n➤ Choose an option (1-9): ").strip()
+        return input("➤ Choose an option (1-9): ").strip()
     
     def _run_phase1_interactive(self):
         """Interactive Phase 1 execution"""
-        print("\\n" + "="*50)
+        print("="*50)
         print("📥 Phase 1: YouTube Data Download")
         print("="*50)
         
-        channel_url = input("\\n➤ Enter YouTube channel URL: ").strip()
+        channel_url = input("➤ Enter YouTube channel URL: ").strip()
         if not channel_url:
             print("❌ Channel URL is required")
             return
         
-        print("\\n🔄 Starting download process...")
+        print("🔄 Starting download process...")
         print("⏱️  This may take several minutes depending on channel size...")
         
         try:
             results = self.downloader.process_channel(channel_url, incremental=True)
             
             if results.get('success_rate', 0) > 0:
-                print(f"\\n✅ Download completed!")
+                print(f"✅ Download completed!")
                 if results.get('incremental_mode', False):
                     print(f"📊 New videos processed: {len(results['processed_videos'])}")
                     print(f"📈 Success rate: {results['success_rate']:.1%}")
@@ -397,7 +399,7 @@ class YouTubeTopicSeeker:
     
     def _run_phase2_interactive(self):
         """Interactive Phase 2 execution"""
-        print("\\n" + "="*50)
+        print("="*50)
         print("✨ Phase 2: Transcript Enhancement")
         print("="*50)
         
@@ -406,19 +408,19 @@ class YouTubeTopicSeeker:
             print("❌ No Phase 1 data found. Please run Phase 1 first.")
             return
         
-        confirm = input("\\n➤ Enhance all downloaded transcripts? (y/N): ").strip().lower()
+        confirm = input("➤ Enhance all downloaded transcripts? (y/N): ").strip().lower()
         if confirm != 'y':
             print("❌ Enhancement cancelled")
             return
         
-        print("\\n🔄 Starting transcript enhancement...")
+        print("🔄 Starting transcript enhancement...")
         print("⏱️  This may take several minutes and will use OpenAI API...")
         
         try:
             results = self.enhancer.process_all_videos(incremental=True)
             
             if results.get('success_count', 0) > 0:
-                print(f"\\n✅ Enhancement completed!")
+                print(f"✅ Enhancement completed!")
                 if results.get('incremental_mode', False):
                     print(f"📊 New videos enhanced: {results['success_count']}")
                     print(f"📈 Success rate: {results['success_rate']:.1%}")
@@ -439,7 +441,7 @@ class YouTubeTopicSeeker:
     
     def _run_phase3_interactive(self):
         """Interactive Phase 3 execution"""
-        print("\\n" + "="*50)
+        print("="*50)
         print("🏗️ Phase 3: Build Vector Store")
         print("="*50)
         
@@ -467,12 +469,12 @@ class YouTubeTopicSeeker:
             print(f"  - {channel['name']}: {channel['files']} files")
         
         # Choose build mode
-        print("\\n📋 Vector Store Build Options:")
+        print("📋 Vector Store Build Options:")
         print("1. 📺 Build for all channels (チャンネル別)")
         print("2. 🔍 Build for specific channel")
         print("3. 🚫 Cancel")
         
-        choice = input("\\n➤ Choose build mode (1-3): ").strip()
+        choice = input("➤ Choose build mode (1-3): ").strip()
         
         if choice == '1':
             self._build_all_channels_vectorstore()
@@ -483,14 +485,14 @@ class YouTubeTopicSeeker:
     
     def _build_all_channels_vectorstore(self):
         """Build vector stores for all channels"""
-        print("\\n🔄 Building vector stores for all channels...")
+        print("🔄 Building vector stores for all channels...")
         print("⏱️  This may take several minutes...")
         
         try:
             results = self.rag.build_all_channels(incremental=True)
             
             if results.get('success_rate', 0) > 0:
-                print(f"\\n✅ Vector stores built successfully!")
+                print(f"✅ Vector stores built successfully!")
                 print(f"📊 Processed channels: {len(results['processed_channels'])}")
                 print(f"❌ Failed channels: {len(results['failed_channels'])}")
                 print(f"📈 Success rate: {results['success_rate']:.1%}")
@@ -501,7 +503,7 @@ class YouTubeTopicSeeker:
                     print(f"  ✅ {channel_name}: {build_info.get('total_videos', 0)} videos, {build_info.get('total_chunks', 0)} chunks")
                 
                 if results['failed_channels']:
-                    print("\\n❌ Failed channels:")
+                    print("❌ Failed channels:")
                     for failed in results['failed_channels']:
                         print(f"  - {failed['channel_name']}: {failed['error']}")
             else:
@@ -513,26 +515,26 @@ class YouTubeTopicSeeker:
     
     def _build_specific_channel_vectorstore(self, channels_with_files):
         """Build vector store for a specific channel"""
-        print("\\n📺 Available channels:")
+        print("📺 Available channels:")
         for i, channel in enumerate(channels_with_files, 1):
             print(f"  {i}. {channel['name']} ({channel['files']} files)")
         
         try:
-            choice = input("\\n➤ Enter channel number: ").strip()
+            choice = input("➤ Enter channel number: ").strip()
             channel_index = int(choice) - 1
             
             if 0 <= channel_index < len(channels_with_files):
                 channel = channels_with_files[channel_index]
                 channel_name = channel['name']
                 
-                print(f"\\n🔄 Building vector store for '{channel_name}'...")
+                print(f"🔄 Building vector store for '{channel_name}'...")
                 print("⏱️  This may take several minutes...")
                 
                 results = self.rag.build_vectorstore(incremental=True, channel_id=channel_name)
                 
                 if results.get('success'):
                     build_info = results['build_info']
-                    print(f"\\n✅ Vector store for '{channel_name}' built successfully!")
+                    print(f"✅ Vector store for '{channel_name}' built successfully!")
                     print(f"📊 Videos: {build_info['total_videos']}")
                     print(f"📄 Chunks: {build_info['total_chunks']}")
                     print(f"🧩 Segments: {build_info['total_segments']}")
@@ -549,24 +551,24 @@ class YouTubeTopicSeeker:
     
     def _run_full_pipeline_interactive(self):
         """Run the complete pipeline interactively"""
-        print("\\n" + "="*50)
+        print("="*50)
         print("🚀 Full Pipeline: All Phases")
         print("="*50)
         
-        channel_url = input("\\n➤ Enter YouTube channel URL: ").strip()
+        channel_url = input("➤ Enter YouTube channel URL: ").strip()
         if not channel_url:
             print("❌ Channel URL is required")
             return
         
-        confirm = input("\\n➤ Run complete pipeline? This will take significant time and API usage (y/N): ").strip().lower()
+        confirm = input("➤ Run complete pipeline? This will take significant time and API usage (y/N): ").strip().lower()
         if confirm != 'y':
             print("❌ Pipeline cancelled")
             return
         
-        print("\\n🔄 Starting full pipeline...")
+        print("🔄 Starting full pipeline...")
         
         # Phase 1
-        print("\\n📥 Phase 1: Downloading videos...")
+        print("📥 Phase 1: Downloading videos...")
         try:
             results1 = self.downloader.process_channel(channel_url, incremental=True)
             if results1.get('success_rate', 0) == 0:
@@ -584,7 +586,7 @@ class YouTubeTopicSeeker:
             return
         
         # Phase 2
-        print("\\n✨ Phase 2: Enhancing transcripts...")
+        print("✨ Phase 2: Enhancing transcripts...")
         try:
             results2 = self.enhancer.process_all_videos(incremental=True)
             if results2.get('success_count', 0) == 0:
@@ -596,7 +598,7 @@ class YouTubeTopicSeeker:
             return
         
         # Phase 3
-        print("\\n🏗️ Phase 3: Building vector store...")
+        print("🏗️ Phase 3: Building vector store...")
         try:
             results3 = self.rag.build_vectorstore(incremental=True)
             if not results3.get('success'):
@@ -607,12 +609,12 @@ class YouTubeTopicSeeker:
             print(f"❌ Phase 3 failed: {e}")
             return
         
-        print("\\n🎉 Full pipeline completed successfully!")
+        print("🎉 Full pipeline completed successfully!")
         print("🔍 You can now search for topics in your videos.")
     
     def _search_topics_interactive(self):
         """Interactive topic search with unified and channel-specific options"""
-        print("\\n" + "="*50)
+        print("="*50)
         print("🔍 Topic Search")
         print("="*50)
         
@@ -630,7 +632,7 @@ class YouTubeTopicSeeker:
             return
         
         # Show search options
-        print("\\n" + "-"*40)
+        print("-"*40)
         print("Search Options:")
         print("-"*40)
         print("1. 🌐 Unified Search (All Channels)")
@@ -638,7 +640,7 @@ class YouTubeTopicSeeker:
         print("3. 🔙 Back to Main Menu")
         print("-"*40)
         
-        choice = input("\\n➤ Choose search type (1-3): ").strip()
+        choice = input("➤ Choose search type (1-3): ").strip()
         
         if choice == '1':
             self._unified_search_interactive()
@@ -651,17 +653,17 @@ class YouTubeTopicSeeker:
     
     def _unified_search_interactive(self):
         """Interactive unified search across all channels"""
-        print("\\n" + "="*50)
+        print("="*50)
         print("🌐 Unified Search (All Channels)")
         print("="*50)
         
         enabled_channels = self.channel_manager.get_enabled_channels()
-        print(f"\\n📺 Searching across {len(enabled_channels)} enabled channels:")
+        print(f"📺 Searching across {len(enabled_channels)} enabled channels:")
         for channel in enabled_channels:
             print(f"  • {channel.name}")
         
         while True:
-            query = input("\\n➤ Enter your search query (or 'back' to return): ").strip()
+            query = input("➤ Enter your search query (or 'back' to return): ").strip()
             if not query or query.lower() == 'back':
                 break
             
@@ -672,17 +674,17 @@ class YouTubeTopicSeeker:
             except ValueError:
                 max_results = 5
             
-            print(f"\\n🔄 Searching across all channels for: '{query}'...")
+            print(f"🔄 Searching across all channels for: '{query}'...")
             
             try:
                 results = self.rag.search_unified(query, max_results)
                 
                 if results:
-                    print(f"\\n✅ Found {len(results)} relevant results:")
+                    print(f"✅ Found {len(results)} relevant results:")
                     print("="*60)
                     
                     for i, result in enumerate(results, 1):
-                        print(f"\\n{i}. 📹 {result['title']}")
+                        print(f"{i}. 📹 {result['title']}")
                         print(f"   📺 Channel: {result.get('channel_name', 'Unknown')}")
                         print(f"   👤 {result['uploader']}")
                         print(f"   📝 {result['topic_summary']}")
@@ -693,7 +695,7 @@ class YouTubeTopicSeeker:
                         if self.config.get_verbosity() >= 3:
                             print(f"   👁️  Preview: {result['content_preview']}")
                 else:
-                    print(f"\\n❌ No relevant results found for '{query}'")
+                    print(f"❌ No relevant results found for '{query}'")
                     print("💡 Try different keywords or check if your data is properly processed")
                     
             except Exception as e:
@@ -704,20 +706,20 @@ class YouTubeTopicSeeker:
         """Interactive channel-specific search"""
         channels = self.channel_manager.get_enabled_channels()
         if not channels:
-            print("\\n❌ No enabled channels found.")
+            print("❌ No enabled channels found.")
             return
         
-        print("\\n" + "="*50)
+        print("="*50)
         print("📺 Channel-Specific Search")
         print("="*50)
         
         # Show channels
-        print("\\nSelect channel to search:")
+        print("Select channel to search:")
         for i, channel in enumerate(channels, 1):
             print(f"  {i}. {channel.name} ({channel.video_count} videos)")
         
         try:
-            choice = input("\\n➤ Enter channel number: ").strip()
+            choice = input("➤ Enter channel number: ").strip()
             channel_index = int(choice) - 1
             
             if 0 <= channel_index < len(channels):
@@ -730,11 +732,11 @@ class YouTubeTopicSeeker:
                     print("💡 Please run Phase 3 first to build the vector store.")
                     return
                 
-                print(f"\\n🔍 Searching in channel: {channel.name}")
+                print(f"🔍 Searching in channel: {channel.name}")
                 
                 # Perform search
                 while True:
-                    query = input(f"\\n➤ Enter search query for '{channel.name}' (or 'back' to return): ").strip()
+                    query = input(f"➤ Enter search query for '{channel.name}' (or 'back' to return): ").strip()
                     if not query or query.lower() == 'back':
                         break
                     
@@ -745,17 +747,17 @@ class YouTubeTopicSeeker:
                     except ValueError:
                         max_results = 5
                     
-                    print(f"\\n🔄 Searching in '{channel.name}' for: '{query}'...")
+                    print(f"🔄 Searching in '{channel.name}' for: '{query}'...")
                     
                     try:
                         results = self.rag.search_topics(query, max_results, channel.id)
                         
                         if results:
-                            print(f"\\n✅ Found {len(results)} relevant results in '{channel.name}':")
+                            print(f"✅ Found {len(results)} relevant results in '{channel.name}':")
                             print("="*60)
                             
                             for i, result in enumerate(results, 1):
-                                print(f"\\n{i}. 📹 {result['title']}")
+                                print(f"{i}. 📹 {result['title']}")
                                 print(f"   👤 {result['uploader']}")
                                 print(f"   📝 {result['topic_summary']}")
                                 print(f"   🔗 {result['timestamp_url']}")
@@ -765,7 +767,7 @@ class YouTubeTopicSeeker:
                                 if self.config.get_verbosity() >= 3:
                                     print(f"   👁️  Preview: {result['content_preview']}")
                         else:
-                            print(f"\\n❌ No relevant results found for '{query}' in '{channel.name}'")
+                            print(f"❌ No relevant results found for '{query}' in '{channel.name}'")
                             print("💡 Try different keywords or check if the channel data is properly processed")
                             
                     except Exception as e:
@@ -780,7 +782,7 @@ class YouTubeTopicSeeker:
     def _legacy_search_interactive(self):
         """Legacy search for single vector store"""
         while True:
-            query = input("\\n➤ Enter your search query (or 'back' to return): ").strip()
+            query = input("➤ Enter your search query (or 'back' to return): ").strip()
             if not query or query.lower() == 'back':
                 break
             
@@ -791,17 +793,17 @@ class YouTubeTopicSeeker:
             except ValueError:
                 max_results = 5
             
-            print(f"\\n🔄 Searching for: '{query}'...")
+            print(f"🔄 Searching for: '{query}'...")
             
             try:
                 results = self.rag.search_topics(query, max_results)
                 
                 if results:
-                    print(f"\\n✅ Found {len(results)} relevant results:")
+                    print(f"✅ Found {len(results)} relevant results:")
                     print("="*60)
                     
                     for i, result in enumerate(results, 1):
-                        print(f"\\n{i}. 📹 {result['title']}")
+                        print(f"{i}. 📹 {result['title']}")
                         print(f"   👤 {result['uploader']}")
                         print(f"   📝 {result['topic_summary']}")
                         print(f"   🔗 {result['timestamp_url']}")
@@ -811,7 +813,7 @@ class YouTubeTopicSeeker:
                         if self.config.get_verbosity() >= 3:
                             print(f"   👁️  Preview: {result['content_preview']}")
                 else:
-                    print(f"\\n❌ No relevant results found for '{query}'")
+                    print(f"❌ No relevant results found for '{query}'")
                     print("💡 Try different keywords or check if your data is properly processed")
                     
             except Exception as e:

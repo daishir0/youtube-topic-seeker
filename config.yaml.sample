@@ -12,7 +12,7 @@ openai:
 # YouTube Download Settings
 youtube:
   # Preferred language codes for subtitles (priority order)
-  subtitle_languages: ["ja", "en", "auto"]
+  subtitle_languages: ["ja"]
   # Download quality preference
   quality: "bestvideo+bestaudio"
   # Maximum videos per channel (0 = all)
@@ -28,6 +28,11 @@ youtube:
   request_timeout: 30  # Request timeout in seconds
   max_retries: 5  # Maximum retry attempts for bot detection errors
   retry_sleep: 10  # Base sleep time between retries (exponential backoff)
+  # 字幕取得専用設定
+  subtitle_fallback_languages: ["ja", "en"]  # フォールバック言語順序
+  subtitle_sleep_interval: 5  # 字幕取得間の待機時間（秒）
+  subtitle_max_retries: 3  # 字幕取得の最大リトライ回数
+  subtitle_429_retry_sleep: 30  # 429エラー時の待機時間（秒）
 
 # Phase 1: Data Download Settings
 phase1:

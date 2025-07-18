@@ -23,7 +23,7 @@ class OpenAIConfig:
 @dataclass
 class YouTubeConfig:
     """YouTube download configuration"""
-    subtitle_languages: List[str] = field(default_factory=lambda: ["ja", "en", "auto"])
+    subtitle_languages: List[str] = field(default_factory=lambda: ["ja"])
     quality: str = "bestvideo+bestaudio"
     max_videos_per_channel: int = 0
     max_age_days: int = 0
@@ -35,6 +35,11 @@ class YouTubeConfig:
     request_timeout: int = 30
     max_retries: int = 5
     retry_sleep: int = 10
+    # 字幕取得専用設定
+    subtitle_fallback_languages: List[str] = field(default_factory=lambda: ["ja", "en"])
+    subtitle_sleep_interval: int = 5
+    subtitle_max_retries: int = 3
+    subtitle_429_retry_sleep: int = 30
 
 @dataclass
 class DateFilterConfig:
@@ -191,7 +196,7 @@ class Config:
         """Initialize YouTube configuration"""
         youtube_config = self._config_data.get('youtube', {})
         return YouTubeConfig(
-            subtitle_languages=youtube_config.get('subtitle_languages', ['ja', 'en', 'auto']),
+            subtitle_languages=youtube_config.get('subtitle_languages', ['ja']),
             quality=youtube_config.get('quality', 'bestvideo+bestaudio'),
             max_videos_per_channel=youtube_config.get('max_videos_per_channel', 0),
             max_age_days=youtube_config.get('max_age_days', 0),
@@ -202,7 +207,11 @@ class Config:
             min_sleep=youtube_config.get('min_sleep', 2),
             request_timeout=youtube_config.get('request_timeout', 30),
             max_retries=youtube_config.get('max_retries', 5),
-            retry_sleep=youtube_config.get('retry_sleep', 10)
+            retry_sleep=youtube_config.get('retry_sleep', 10),
+            subtitle_fallback_languages=youtube_config.get('subtitle_fallback_languages', ['ja', 'en']),
+            subtitle_sleep_interval=youtube_config.get('subtitle_sleep_interval', 5),
+            subtitle_max_retries=youtube_config.get('subtitle_max_retries', 3),
+            subtitle_429_retry_sleep=youtube_config.get('subtitle_429_retry_sleep', 30)
         )
     
     def _init_phase1_config(self) -> Phase1Config:

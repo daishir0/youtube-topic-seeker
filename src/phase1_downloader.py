@@ -52,9 +52,13 @@ class YouTubeDownloader:
         date_config = self.config.phase1.date_filter
         
         if not date_config.enabled:
+            if self.config.general.debug:
+                logger.info("[DEBUG] Date filter is disabled")
             return None
             
         if date_config.mode == "all":
+            if self.config.general.debug:
+                logger.info("[DEBUG] Date filter mode: all (no filtering)")
             return None
         elif date_config.mode == "recent":
             # Calculate date N months ago
@@ -77,14 +81,27 @@ class YouTubeDownloader:
             target_date = datetime(target_year, target_month, last_day)
             
             # Format as YYYYMMDD for yt-dlp
-            return target_date.strftime("%Y%m%d")
+            date_filter = target_date.strftime("%Y%m%d")
+            
+            if self.config.general.debug:
+                logger.info(f"[DEBUG] Date filter mode: recent ({months_ago} months ago)")
+                logger.info(f"[DEBUG] Filter date: {target_date.strftime('%Y-%m-%d')} (yt-dlp format: {date_filter})")
+                logger.info(f"[DEBUG] Videos uploaded after {target_date.strftime('%Y-%m-%d')} will be included")
+            
+            return date_filter
             
         elif date_config.mode == "since" and date_config.since_date:
             try:
                 # Parse YYYY-MM-DD format
                 from datetime import datetime
                 target_date = datetime.strptime(date_config.since_date, "%Y-%m-%d")
-                return target_date.strftime("%Y%m%d")
+                date_filter = target_date.strftime("%Y%m%d")
+                
+                if self.config.general.debug:
+                    logger.info(f"[DEBUG] Date filter mode: since {date_config.since_date}")
+                    logger.info(f"[DEBUG] Filter date: {date_config.since_date} (yt-dlp format: {date_filter})")
+                
+                return date_filter
             except ValueError:
                 logger.warning(f"Invalid since_date format: {date_config.since_date}. Expected YYYY-MM-DD")
                 return None
@@ -109,7 +126,7 @@ class YouTubeDownloader:
         
         ydl_opts = {
             'quiet': True,
-            'extract_flat': True,
+            'extract_flat': True,  # まず動画リストを取得
             'playlistend': self.config.youtube.max_videos_per_channel or None,
         }
         
@@ -152,6 +169,16 @@ class YouTubeDownloader:
             logger.error(f"All extraction approaches failed for {channel_url}")
             
         logger.info(f"Found {len(video_urls)} videos to download")
+        
+        if self.config.general.debug and video_urls:
+            logger.info(f"[DEBUG] Total videos found: {len(video_urls)}")
+            logger.info(f"[DEBUG] Max videos per channel setting: {self.config.youtube.max_videos_per_channel}")
+            logger.info(f"[DEBUG] Date filter enabled: {self.config.phase1.date_filter.enabled}")
+            if self.config.phase1.date_filter.enabled:
+                logger.info(f"[DEBUG] Date filter mode: {self.config.phase1.date_filter.mode}")
+                if self.config.phase1.date_filter.mode == 'recent':
+                    logger.info(f"[DEBUG] Recent months: {self.config.phase1.date_filter.default_months}")
+        
         return video_urls
     
     def _extract_with_standard_method(self, ydl_opts: dict, channel_url: str) -> List[str]:
@@ -169,18 +196,18 @@ class YouTubeDownloader:
                     info = ydl.extract_info(url_format, download=False)
                     
                     if 'entries' in info:
+                        # First, collect all video IDs
+                        video_entries = []
                         for entry in info['entries']:
                             if entry and 'id' in entry:
-                                video_id = entry['id']
-                                video_url = f"https://www.youtube.com/watch?v={video_id}"
-                                
-                                # Check age filter
-                                if self.config.youtube.max_age_days > 0:
-                                    upload_date = entry.get('upload_date')
-                                    if upload_date and self._is_too_old(upload_date):
-                                        continue
-                                
-                                video_urls.append(video_url)
+                                video_entries.append({
+                                    'id': entry['id'],
+                                    'title': entry.get('title', 'Unknown Title'),
+                                    'url': f"https://www.youtube.com/watch?v={entry['id']}"
+                                })
+                        
+                        # Apply date filter by checking individual videos
+                        video_urls = self._apply_date_filter_to_videos(video_entries)
                         break  # Success, no need to try other formats
                 except Exception as e:
                     logger.debug(f"Failed with {url_format}: {e}")
@@ -194,7 +221,7 @@ class YouTubeDownloader:
         # Minimal options for maximum compatibility
         minimal_opts = {
             'quiet': True,
-            'extract_flat': True,
+            'extract_flat': True,  # フラット抽出で動画リストを取得
             'force_ipv4': True,
             'socket_timeout': 30,
             'retries': 3,
@@ -219,27 +246,121 @@ class YouTubeDownloader:
                 info = ydl.extract_info(f"{channel_url}/videos", download=False)
                 
                 if 'entries' in info:
+                    # Collect video entries for fallback method
+                    video_entries = []
                     for entry in info['entries']:
                         if entry and 'id' in entry:
-                            video_id = entry['id']
-                            video_url = f"https://www.youtube.com/watch?v={video_id}"
-                            video_urls.append(video_url)
+                            video_entries.append({
+                                'id': entry['id'],
+                                'title': entry.get('title', 'Unknown Title'),
+                                'url': f"https://www.youtube.com/watch?v={entry['id']}"
+                            })
                             
                             # Limit to prevent overwhelming in fallback mode
-                            if len(video_urls) >= 20:
+                            if len(video_entries) >= 20:
                                 break
+                    
+                    # Apply date filter to collected videos
+                    video_urls = self._apply_date_filter_to_videos(video_entries)
         except Exception as e:
             logger.debug(f"Fallback method failed: {e}")
             
         return video_urls
+    
+    def _apply_date_filter_to_videos(self, video_entries: List[Dict[str, str]]) -> List[str]:
+        """Apply date filter by checking individual videos"""
+        filtered_urls = []
+        date_filter = self._get_date_filter_option()
+        
+        if not date_filter:
+            # No date filter, return all videos
+            return [entry['url'] for entry in video_entries]
+        
+        # Convert date filter to datetime for comparison
+        try:
+            cutoff_date = datetime.strptime(date_filter, '%Y%m%d')
+        except:
+            logger.warning(f"Invalid date filter format: {date_filter}")
+            return [entry['url'] for entry in video_entries]
+        
+        if self.config.general.debug:
+            logger.info(f"[DEBUG] Checking {len(video_entries)} videos against date filter: {cutoff_date.strftime('%Y-%m-%d')}")
+        
+        # Check each video individually (with rate limiting)
+        for i, entry in enumerate(video_entries):
+            try:
+                # Add delay to avoid rate limiting
+                if i > 0:
+                    time.sleep(0.5)  # 500ms delay between requests
+                
+                # Get video details
+                video_info = self._get_video_details(entry['url'])
+                if video_info and 'upload_date' in video_info:
+                    upload_date_str = video_info['upload_date']
+                    upload_date = datetime.strptime(upload_date_str, '%Y%m%d')
+                    
+                    if self.config.general.debug:
+                        logger.info(f"[DEBUG] Video: {entry['title'][:50]}... | Upload Date: {upload_date.strftime('%Y-%m-%d')} | Video ID: {entry['id']}")
+                    
+                    # Check if video is newer than cutoff date
+                    if upload_date >= cutoff_date:
+                        filtered_urls.append(entry['url'])
+                    else:
+                        if self.config.general.debug:
+                            logger.info(f"[DEBUG] Skipping old video: {entry['id']} (uploaded: {upload_date.strftime('%Y-%m-%d')})")
+                else:
+                    # If we can't get upload date, include the video (conservative approach)
+                    if self.config.general.debug:
+                        logger.info(f"[DEBUG] Video: {entry['title'][:50]}... | Upload Date: Unknown | Video ID: {entry['id']} (including)")
+                    filtered_urls.append(entry['url'])
+                    
+            except Exception as e:
+                if self.config.general.debug:
+                    logger.info(f"[DEBUG] Error checking video {entry['id']}: {e} (including)")
+                # If error occurs, include the video (conservative approach)
+                filtered_urls.append(entry['url'])
+        
+        if self.config.general.debug:
+            logger.info(f"[DEBUG] Date filter result: {len(filtered_urls)}/{len(video_entries)} videos passed")
+        
+        return filtered_urls
+    
+    def _get_video_details(self, video_url: str) -> Optional[Dict]:
+        """Get detailed information for a single video"""
+        try:
+            ydl_opts = {
+                'quiet': True,
+                'skip_download': True,
+                'writeinfojson': False,
+                'extract_flat': False,
+            }
+            
+            # Add proxy if available
+            proxy_url = self.config.get_proxy_url()
+            if proxy_url:
+                ydl_opts['proxy'] = proxy_url
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                return ydl.extract_info(video_url, download=False)
+                
+        except Exception as e:
+            logger.debug(f"Failed to get details for {video_url}: {e}")
+            return None
     
     def _is_too_old(self, upload_date: str) -> bool:
         """Check if video is too old based on config"""
         try:
             video_date = datetime.strptime(upload_date, '%Y%m%d')
             cutoff_date = datetime.now() - timedelta(days=self.config.youtube.max_age_days)
-            return video_date < cutoff_date
-        except:
+            is_old = video_date < cutoff_date
+            
+            if self.config.general.debug:
+                logger.info(f"[DEBUG] Age check: Video date {video_date.strftime('%Y-%m-%d')} vs cutoff {cutoff_date.strftime('%Y-%m-%d')} (max_age_days: {self.config.youtube.max_age_days}) -> {'TOO OLD' if is_old else 'OK'}")
+            
+            return is_old
+        except Exception as e:
+            if self.config.general.debug:
+                logger.info(f"[DEBUG] Age check failed for upload_date '{upload_date}': {e}")
             return False
     
     def download_video_data(self, video_url: str, channel_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -439,16 +560,34 @@ class YouTubeDownloader:
         return None
     
     def _download_timestamped_transcript(self, video_url: str, output_dir: Path) -> Optional[Dict[str, Any]]:
-        """Download transcript with preserved timestamp information"""
-        logger.debug(f"Downloading timestamped transcript")
+        """Download transcript with preserved timestamp information using fallback strategy"""
+        logger.debug(f"Downloading timestamped transcript with fallback strategy")
         
-        # Configure subtitle options for maximum context preservation
+        # Try each language in fallback order
+        for lang in self.config.youtube.subtitle_fallback_languages:
+            logger.debug(f"Attempting to download subtitles in language: {lang}")
+            
+            # Add sleep between language attempts
+            if lang != self.config.youtube.subtitle_fallback_languages[0]:
+                time.sleep(self.config.youtube.subtitle_sleep_interval)
+            
+            result = self._download_subtitle_for_language(video_url, output_dir, lang)
+            if result:
+                logger.info(f"Successfully downloaded subtitles in language: {lang}")
+                return result
+            
+        logger.warning(f"No subtitles found for {video_url} in any fallback language")
+        return None
+    
+    def _download_subtitle_for_language(self, video_url: str, output_dir: Path, language: str) -> Optional[Dict[str, Any]]:
+        """Download subtitle for a specific language with 429 error handling"""
+        
+        # Configure subtitle options - only automatic subtitles to reduce requests
         ydl_opts = {
-            'writesubtitles': True,
-            'writeautomaticsub': True,
-            'subtitleslangs': self.config.youtube.subtitle_languages,
+            'writeautomaticsub': True,  # Only automatic subtitles
+            'subtitleslangs': [language],  # Single language only
             'skip_download': True,
-            'outtmpl': str(output_dir / 'subtitle.%(ext)s'),  # Use simple filename to avoid path length issues
+            'outtmpl': str(output_dir / 'subtitle.%(ext)s'),  # Use simple filename to match existing pattern
             'subtitlesformat': 'vtt',  # VTT preserves timestamps
             'quiet': True,
         }
@@ -458,25 +597,42 @@ class YouTubeDownloader:
         if proxy_url:
             ydl_opts['proxy'] = proxy_url
         
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(video_url, download=True)
-                
-                # Find the downloaded subtitle file with simple filename
-                for lang in self.config.youtube.subtitle_languages:
-                    # Try different subtitle file patterns with simple filename
-                    for pattern in [f"subtitle.{lang}.vtt", f"subtitle.{lang}-auto.vtt"]:
+        # Retry mechanism for 429 errors
+        for attempt in range(self.config.youtube.subtitle_max_retries):
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(video_url, download=True)
+                    
+                    # Find the downloaded subtitle file - match existing pattern
+                    for pattern in [f"subtitle.{language}.vtt", f"subtitle.{language}-auto.vtt"]:
                         subtitle_path = output_dir / pattern
                         if subtitle_path.exists():
                             # Process VTT to extract timestamped transcript
-                            return self._process_vtt_transcript(subtitle_path, lang)
+                            return self._process_vtt_transcript(subtitle_path, language)
+                    
+                    # If no file found, this language is not available
+                    logger.debug(f"No subtitles available for language: {language}")
+                    return None
+                    
+            except Exception as e:
+                error_msg = str(e).lower()
                 
-                logger.warning(f"No subtitles found for {video_url}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Failed to download transcript: {e}")
-            return None
+                # Handle 429 errors specifically
+                if '429' in error_msg or 'too many requests' in error_msg:
+                    if attempt < self.config.youtube.subtitle_max_retries - 1:
+                        wait_time = self.config.youtube.subtitle_429_retry_sleep * (attempt + 1)
+                        logger.warning(f"429 error for subtitles in {language}, waiting {wait_time} seconds (attempt {attempt + 1}/{self.config.youtube.subtitle_max_retries})")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"429 error persists for subtitles in {language} after {self.config.youtube.subtitle_max_retries} attempts")
+                        return None
+                else:
+                    # Other errors - log and try next language
+                    logger.debug(f"Failed to download subtitles for {language}: {e}")
+                    return None
+        
+        return None
     
     def _process_vtt_transcript(self, vtt_path: Path, language: str) -> Dict[str, Any]:
         """Process VTT file to create timestamped transcript with enhanced context"""
@@ -609,7 +765,23 @@ class YouTubeDownloader:
                     # Extract video ID from directory name (format: {video_id}_{title})
                     dir_name = video_dir.name
                     if '_' in dir_name:
-                        video_id = dir_name.split('_')[0]
+                        # YouTube video IDs are 11 characters long
+                        # Find the first underscore after a valid video ID length
+                        parts = dir_name.split('_')
+                        if len(parts[0]) == 11:
+                            # Standard case: 11-character video ID
+                            video_id = parts[0]
+                        else:
+                            # Handle video IDs with underscores (like dS6_6_48SEc)
+                            # Look for the pattern where title starts (usually with Japanese characters or brackets)
+                            for i in range(1, len(parts)):
+                                potential_id = '_'.join(parts[:i+1])
+                                if len(potential_id) == 11:
+                                    video_id = potential_id
+                                    break
+                            else:
+                                # Fallback: assume first part is video ID
+                                video_id = parts[0]
                         existing_video_ids.add(video_id)
         
         # Check each video URL

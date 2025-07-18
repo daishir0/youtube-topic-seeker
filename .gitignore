@@ -1,5 +1,5 @@
 config.yaml
-data/
+data*/
 logs/
 src/__pycache__
 gomi/
